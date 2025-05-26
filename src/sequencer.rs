@@ -65,7 +65,7 @@ pub enum ProducerMode {
 // --- Sequencer Struct ---
 pub struct Sequencer {
     pub producer_cursor: Arc<Sequence>,
-    pub gating_sequences: Mutex<Vec<Arc<Sequence>>>,
+    pub gating_sequences: RwLock<Vec<Arc<Sequence>>>,
     pub buffer_size: i64,
     index_mask: i64,
     index_shift: i64,
@@ -92,7 +92,7 @@ impl Sequencer {
 
         Sequencer {
             producer_cursor: Arc::new(Sequence::new(-1)),
-            gating_sequences: Mutex::new(Vec::new()),
+            gating_sequences: RwLock::new(Vec::new()),
             buffer_size: capacity_i64,
             index_mask: (capacity_i64 - 1),
             index_shift,
@@ -104,7 +104,7 @@ impl Sequencer {
     }
 
     pub fn add_gating_sequence(&self, sequence: Arc<Sequence>) {
-        let mut gating_sequences_guard = self.gating_sequences.lock().unwrap();
+        let mut gating_sequences_guard = self.gating_sequences.write().unwrap();
         gating_sequences_guard.push(Arc::clone(&sequence));
 
         // Update the single consumer cache
@@ -264,7 +264,7 @@ impl Sequencer {
             // fall through to the general path.
         }
 
-        let gating_sequences_guard = self.gating_sequences.lock().unwrap();
+        let gating_sequences_guard = self.gating_sequences.read().unwrap();
         if gating_sequences_guard.is_empty() {
             // If no consumers, the "barrier" is effectively the producer's own cursor,
             // but producers wait for consumers not to wrap the buffer *ahead* of them.
