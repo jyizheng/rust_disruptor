@@ -1,110 +1,73 @@
 // src/consumer.rs
 
+use std::sync::Arc;
+use std::ops::Fn;
 use crate::event::Event;
 use crate::ring_buffer::RingBuffer;
-use crate::sequencer::Sequence;
+use crate::sequencer::{Sequencer, Sequence};
 use crate::wait_strategy::WaitStrategy;
-use std::sync::Arc;
 
-/// The `Consumer` reads events from the `RingBuffer` and processes them.
-///
-/// Each consumer maintains its own `Sequence` to track its progress
-/// and uses a `WaitStrategy` to efficiently wait for new events.
+/// Represents a consumer of events from the Disruptor.
 pub struct Consumer<T: Event, W: WaitStrategy> {
-    /// The consumer's own sequence, tracking the last event it processed.
-    pub sequence: Arc<Sequence>,
-    /// Shared reference to the producer's cursor.
-    cursor: Arc<Sequence>,
-    /// Shared reference to the `RingBuffer` from which to read events.
+    pub sequence: Arc<Sequence>, // 消费者自己的序列号 (公开以便 Sequencer 门控)
+    sequencer: Arc<Sequencer>,
     ring_buffer: Arc<RingBuffer<T>>,
-    /// The strategy used to wait for new events.
-    wait_strategy: W,
-    /// A dependent sequence. If this consumer relies on another consumer
-    /// processing an event first, that consumer's sequence goes here.
-    /// For now, we'll keep it simple and assume no direct dependencies unless specified.
-    dependent_sequence: Option<Arc<Sequence>>,
+    wait_strategy: Arc<W>, 
+    
+    // 门控序列：消费者需要等待这些序列号（包括生产者和依赖的消费者）
+    gating_sequences_for_wait: Vec<Arc<Sequence>>,
 }
 
 impl<T: Event, W: WaitStrategy> Consumer<T, W> {
-    /// Creates a new `Consumer`.
-    ///
-    /// # Arguments
-    /// * `cursor`: The producer's cursor, to know what's available.
-    /// * `ring_buffer`: The shared `RingBuffer`.
-    /// * `wait_strategy`: The chosen wait strategy for this consumer.
-    /// * `dependent_sequence`: Optional sequence of another consumer this one depends on.
     pub fn new(
-        cursor: Arc<Sequence>,
+        sequencer: Arc<Sequencer>,
         ring_buffer: Arc<RingBuffer<T>>,
-        wait_strategy: W,
-        dependent_sequence: Option<Arc<Sequence>>,
+        wait_strategy: W, // 接收具体类型 W
+        // --- 修正点：接受 Vec<Arc<Sequence>> 作为依赖 ---
+        dependent_sequences: Vec<Arc<Sequence>>, 
     ) -> Self {
+        let consumer_sequence = Arc::new(Sequence::new(-1)); 
+
+        let mut gating_sequences = Vec::new();
+        // 生产者光标是首要门控条件
+        gating_sequences.push(Arc::clone(&sequencer.producer_cursor)); 
+        // --- 修正点：添加所有依赖的消费者序列 ---
+        for dep_seq in dependent_sequences {
+            gating_sequences.push(dep_seq);
+        }
+
         Consumer {
-            sequence: Arc::new(Sequence::new(-1)), // Start at -1, just like the producer's cursor
-            cursor,
+            sequence: consumer_sequence,
+            sequencer,
             ring_buffer,
-            wait_strategy,
-            dependent_sequence,
+            wait_strategy: Arc::new(wait_strategy), 
+            gating_sequences_for_wait: gating_sequences,
         }
     }
 
-    /// Attempts to read and process the next available event.
-    ///
-    /// This method will wait until the event at `next_sequence` is available
-    /// (published by the producer and potentially processed by any dependencies).
-    ///
-    /// # Returns
-    /// An `Option<&T>` representing the event that was processed.
-    /// In a real Disruptor, this might be a batch processing loop.
-    pub fn try_next(&self) -> Option<&T> {
-        let next_sequence = self.sequence.get() + 1;
-
-        // Wait for the next event to be available according to the wait strategy
-        let available_sequence = self.wait_strategy.wait_for(
-            next_sequence,
-            Arc::clone(&self.cursor),
-            self.dependent_sequence.as_ref().map(Arc::clone),
-            Arc::clone(&self.sequence),
-        );
-
-        if available_sequence >= next_sequence {
-            // Event is available, get it from the ring buffer
-            let event = self.ring_buffer.get(next_sequence);
-
-            // Update the consumer's own sequence to reflect that this event
-            // has been processed.
-            self.sequence.set(next_sequence);
-
-            Some(event)
-        } else {
-            None // No new event available yet
-        }
-    }
-
-    /// Processes a single event by applying a closure.
-    ///
-    /// This provides a convenient way to integrate custom processing logic.
-    pub fn process_event<F>(&self, mut processor: F) -> Option<()>
+    /// Processes the next available event from the RingBuffer.
+    pub fn process_event<F>(&self, event_handler: F) -> Option<i64>
     where
-        F: FnMut(&T),
+        F: Fn(&T), 
     {
-        let next_sequence = self.sequence.get() + 1;
+        let next_sequence_to_consume = self.sequence.get() + 1; 
 
         let available_sequence = self.wait_strategy.wait_for(
-            next_sequence,
-            Arc::clone(&self.cursor),
-            self.dependent_sequence.as_ref().map(Arc::clone),
-            Arc::clone(&self.sequence),
+            next_sequence_to_consume,
+            &self.gating_sequences_for_wait, // 传递包含所有门控条件的切片
+            Arc::clone(&self.sequence), 
         );
 
-        if available_sequence >= next_sequence {
-            let event = self.ring_buffer.get(next_sequence);
-            processor(event); // Apply the processing function
-            self.sequence.set(next_sequence); // Update sequence after processing
-            Some(())
+        if next_sequence_to_consume <= available_sequence {
+            unsafe {
+                let event = self.ring_buffer.get(next_sequence_to_consume);
+                event_handler(event); 
+            }
+            
+            self.sequence.set(next_sequence_to_consume);
+            Some(next_sequence_to_consume)
         } else {
-            None
+            None 
         }
     }
 }
-
