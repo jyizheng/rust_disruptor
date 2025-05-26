@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+core_affinity = "0.8"
 
 [profile.release]
 lto = true
@@ -21,6 +22,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "basic_main"
 path = "src/bin/basic_main.rs"
+
+[[bin]]
+name = "perf_affinity_main"
+path = "src/bin/perf_affinity_main.rs"
 
 [[bin]]
 name = "perf_main"

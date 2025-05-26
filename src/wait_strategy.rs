@@ -36,8 +36,32 @@ pub struct BusySpinWaitStrategy;
 impl WaitStrategy for BusySpinWaitStrategy {
     fn wait_for(
         &self,
+        sequence: i64, // sequence to be consumed
+        sequencer: Arc<Sequencer>,
+        gating_sequences: &[Arc<Sequence>], // For SPSC, this is just [producer_cursor]
+        _consumer_sequence: Arc<Sequence>,
+    ) -> i64 {
+        loop {
+            // Check the producer's progress first (this is cheap)
+            let producer_cursor_val = get_minimum_sequence(gating_sequences); // In SPSC, this is producer_cursor.get()
+
+            if producer_cursor_val >= sequence {
+                // Only if the producer claims to be ahead, check the available_buffer
+                // This is the more expensive check.
+                let highest_published_and_gated = sequencer.get_highest_available_sequence(sequence - 1);
+                if highest_published_and_gated >= sequence {
+                    return highest_published_and_gated;
+                }
+            }
+            hint::spin_loop(); // Spin regardless, but we avoided one expensive call if producer wasn't ahead
+        }
+    }
+
+
+    /*fn wait_for_bak(
+        &self,
         sequence: i64,
-        sequencer: Arc<Sequencer>, // <-- 核心修正点：确保此参数存在
+        sequencer: Arc<Sequencer>, 
         gating_sequences: &[Arc<Sequence>], 
         _consumer_sequence: Arc<Sequence>, 
     ) -> i64 {
@@ -53,7 +77,7 @@ impl WaitStrategy for BusySpinWaitStrategy {
             }
             hint::spin_loop();
         }
-    }
+    }*/
 
     fn signal_all(&self) { }
 
