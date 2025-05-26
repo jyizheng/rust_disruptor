@@ -7,20 +7,12 @@ use std::hint;
 use std::time::{Instant, Duration};
 
 /// Trait defining the interface for different wait strategies.
-/// 
-/// 实现了 Send + Sync + 'static + Clone + Default trait。
-pub trait WaitStrategy: Send + Sync + 'static + Clone + Default {
+///
+/// 实现了 Send + Sync + 'static trait。
+/// 'Clone' 和 'Default' 已从 supertrait 中移除，以使其 'dyn' 兼容。
+pub trait WaitStrategy: Send + Sync + 'static { // <-- 移除 Clone 和 Default
     /// Waits until the `consumer_sequence` is less than or equal to the `gating_sequence`.
-    ///
-    /// # Arguments
-    /// * `sequence`: The sequence number the consumer is trying to reach.
-    /// * `cursor`: The producer's current published sequence (global cursor).
-    /// * `dependent_sequence`: (Optional) The sequence of a dependent consumer (if any),
-    ///   meaning we also need to wait for this consumer to pass the `sequence`.
-    /// * `consumer_sequence`: The consumer's own current sequence.
-    ///
-    /// # Returns
-    /// The actual highest sequence number that has become available and meets dependencies.
+    // (wait_for 方法保持不变)
     fn wait_for(
         &self,
         sequence: i64,
@@ -30,12 +22,25 @@ pub trait WaitStrategy: Send + Sync + 'static + Clone + Default {
     ) -> i64;
 
     /// Signals all waiting consumers that new events might be available.
-    /// This method is called by the `Sequencer` after an event is published.
+    // (signal_all 方法保持不变)
     fn signal_all(&self);
+
+    /// Clones the trait object into a `Box<dyn WaitStrategy>`.
+    /// This method is required because `dyn WaitStrategy` itself cannot derive Clone.
+    fn clone_box(&self) -> Box<dyn WaitStrategy>; // <-- 新增方法
 }
 
+// --- 为 `Box<dyn WaitStrategy>` 实现 Clone trait ---
+// 这使得 `Arc<dyn WaitStrategy>` 可以被克隆。
+impl Clone for Box<dyn WaitStrategy> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+
 /// A `WaitStrategy` that continuously busy-spins until the event is available.
-#[derive(Clone, Default)]
+#[derive(Clone, Default)] // Clone 和 Default 仍为具体实现所需
 pub struct BusySpinWaitStrategy;
 
 impl WaitStrategy for BusySpinWaitStrategy {
@@ -48,7 +53,6 @@ impl WaitStrategy for BusySpinWaitStrategy {
     ) -> i64 {
         loop {
             let available_sequence = cursor.get();
-
             if available_sequence >= sequence {
                 if let Some(dep_seq) = &dependent_sequence {
                     if dep_seq.get() >= sequence {
@@ -58,7 +62,6 @@ impl WaitStrategy for BusySpinWaitStrategy {
                     return available_sequence;
                 }
             }
-
             hint::spin_loop();
         }
     }
@@ -66,19 +69,17 @@ impl WaitStrategy for BusySpinWaitStrategy {
     fn signal_all(&self) {
         // 不需要显式信号
     }
+
+    fn clone_box(&self) -> Box<dyn WaitStrategy> { // <-- 实现 clone_box
+        Box::new(self.clone())
+    }
 }
 
 
 /// A `WaitStrategy` that uses a `Condvar` to block consumer threads when no events are available.
-#[derive(Clone)] 
+#[derive(Clone, Default)] // Clone 和 Default 仍为具体实现所需
 pub struct BlockingWaitStrategy {
     notification_pair: Arc<(Mutex<bool>, Condvar)>, 
-}
-
-impl Default for BlockingWaitStrategy {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl BlockingWaitStrategy {
@@ -123,12 +124,15 @@ impl WaitStrategy for BlockingWaitStrategy {
         *ready_flag = true; 
         cvar.notify_all(); 
     }
+
+    fn clone_box(&self) -> Box<dyn WaitStrategy> { // <-- 实现 clone_box
+        Box::new(self.clone())
+    }
 }
 
-// --- 新增：YieldingWaitStrategy ---
+
 /// A `WaitStrategy` that repeatedly calls `thread::yield_now()` when waiting.
-/// It offers a balance between latency and CPU usage compared to busy-spinning.
-#[derive(Clone, Default)] // 遵循 trait 的要求
+#[derive(Clone, Default)] 
 pub struct YieldingWaitStrategy;
 
 impl WaitStrategy for YieldingWaitStrategy {
@@ -141,22 +145,25 @@ impl WaitStrategy for YieldingWaitStrategy {
     ) -> i64 {
         loop {
             let available_sequence = cursor.get();
-            let dependencies_met = if let Some(dep_seq) = &dependent_sequence {
-                dep_seq.get() >= sequence
-            } else {
-                true
-            };
-
-            if available_sequence >= sequence && dependencies_met {
-                return available_sequence;
+            if available_sequence >= sequence {
+                if let Some(dep_seq) = &dependent_sequence {
+                    if dep_seq.get() >= sequence {
+                        return available_sequence;
+                    }
+                } else {
+                    return available_sequence;
+                }
             }
-
-            thread::yield_now(); // 让出 CPU，等待下一次调度
+            thread::yield_now(); 
         }
     }
 
     fn signal_all(&self) {
-        // 对于让步策略，不需要显式信号。
+        // 不需要显式信号
+    }
+
+    fn clone_box(&self) -> Box<dyn WaitStrategy> { // <-- 实现 clone_box
+        Box::new(self.clone())
     }
 }
 
@@ -167,9 +174,8 @@ pub struct PhasedBackoffWaitStrategy {
     spin_timeout: Duration,
     yield_timeout: Duration,
     
-    // 内部持有的策略实例
     busy_spin_strategy: BusySpinWaitStrategy,
-    yielding_strategy: YieldingWaitStrategy, // <-- 新增：让步策略
+    yielding_strategy: YieldingWaitStrategy, 
     blocking_strategy: BlockingWaitStrategy, 
 }
 
@@ -179,7 +185,7 @@ impl Default for PhasedBackoffWaitStrategy {
             Duration::from_micros(500), 
             Duration::from_millis(5),  
             BusySpinWaitStrategy::default(),
-            YieldingWaitStrategy::default(), // <-- 初始化 YieldingWaitStrategy
+            YieldingWaitStrategy::default(), 
             BlockingWaitStrategy::default(),
         )
     }
@@ -190,14 +196,14 @@ impl PhasedBackoffWaitStrategy {
         spin_timeout: Duration,
         yield_timeout: Duration,
         busy_spin_strategy: BusySpinWaitStrategy,
-        yielding_strategy: YieldingWaitStrategy, // <-- 新增参数
+        yielding_strategy: YieldingWaitStrategy, 
         blocking_strategy: BlockingWaitStrategy,
     ) -> Self {
         PhasedBackoffWaitStrategy {
             spin_timeout,
             yield_timeout,
             busy_spin_strategy,
-            yielding_strategy, // <-- 赋值
+            yielding_strategy, 
             blocking_strategy,
         }
     }
@@ -229,7 +235,7 @@ impl WaitStrategy for PhasedBackoffWaitStrategy {
             hint::spin_loop();
         }
 
-        // Phase 2: Yielding (委托给 YieldingWaitStrategy)
+        // Phase 2: Yielding 
         let yield_start_time = Instant::now();
         loop {
             let available_sequence = cursor.get();
@@ -244,19 +250,6 @@ impl WaitStrategy for PhasedBackoffWaitStrategy {
             if yield_start_time.elapsed() > self.yield_timeout {
                 break; 
             }
-            // 委托给 YieldingWaitStrategy 的 wait_for 方法，但需要处理参数
-            // 因为 YieldingWaitStrategy::wait_for 也会循环，我们不能直接返回其结果
-            // 而是只调用其内部的让步动作。
-            self.yielding_strategy.wait_for(
-                sequence, 
-                Arc::clone(&cursor), // 克隆 Arc 以匹配签名
-                dependent_sequence.as_ref().map(Arc::clone), // 克隆 Option<Arc>
-                Arc::clone(&consumer_sequence) // 克隆 Arc
-            );
-            // 上述直接调用 `wait_for` 会导致 `loop in a loop`，且不符合 PhasedBackoff 的意图。
-            // 正确的做法是只执行 YieldingWaitStrategy 的核心动作：`thread::yield_now();`
-            // 而不是调用它的整个 `wait_for` 循环。
-            // 因此，我们直接在这里调用 `thread::yield_now();`
             thread::yield_now(); 
         }
 
@@ -265,7 +258,10 @@ impl WaitStrategy for PhasedBackoffWaitStrategy {
     }
 
     fn signal_all(&self) {
-        // 只需要唤醒阻塞策略
         self.blocking_strategy.signal_all();
+    }
+
+    fn clone_box(&self) -> Box<dyn WaitStrategy> { // <-- 实现 clone_box
+        Box::new(self.clone())
     }
 }
