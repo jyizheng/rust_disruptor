@@ -178,13 +178,13 @@ fn run_one_to_one_throughput_test() {
     println!("\n--- 运行一对一有序吞吐量测试 ---");
 
     const BUFFER_SIZE_PERF: usize = 1024 * 1; // 65536
-    const ITERATIONS_PERF: u64 = 8192; // Adjust this to test the stall scenario
+    const ITERATIONS_PERF: u64 = 100_0000; // Adjust this to test the stall scenario
     // const ITERATIONS_PERF: u64 = 100_000_000; // Original high-throughput test value
     
     let expected_sum_perf: u64 = (ITERATIONS_PERF * (ITERATIONS_PERF - 1)) / 2;
 
     // --- 修正点：使用 BlockingWaitStrategy 来验证活锁问题 ---
-    let mut disruptor_perf = Disruptor::<MyEvent, BlockingWaitStrategy>::new(BUFFER_SIZE_PERF, BlockingWaitStrategy::default());
+    let mut disruptor_perf = Disruptor::<MyEvent, BusySpinWaitStrategy>::new(BUFFER_SIZE_PERF, BusySpinWaitStrategy::default());
     let producer_perf = disruptor_perf.create_producer(); 
     // 单个消费者，无依赖
     let consumer_perf = disruptor_perf.create_consumer(vec![]); 
@@ -208,9 +208,10 @@ fn run_one_to_one_throughput_test() {
                 unsafe {
                     let event_perf = consumer_perf.ring_buffer.get(next_sequence_to_consume_perf);
                     consumer_thread_sum_clone_perf.fetch_add(event_perf.value, Ordering::SeqCst);
-                    println!("[性能测试消费者] 消费序列号: {}, 值: {}", next_sequence_to_consume_perf, event_perf.value); // Verbose logging
+                    //println!("[性能测试消费者] 消费序列号: {}, 值: {}", next_sequence_to_consume_perf, event_perf.value); // Verbose logging
                 }
                 last_sequence_processed_perf = next_sequence_to_consume_perf;
+                consumer_perf.sequence.set(last_sequence_processed_perf);   // ← ☆ 关键补写
                 processed_count_perf += 1;
 
                 if processed_count_perf >= ITERATIONS_PERF {
@@ -239,7 +240,7 @@ fn run_one_to_one_throughput_test() {
         unsafe {
             let event_perf = producer_perf.get_mut(sequence_perf);
             event_perf.value = i; 
-            println!("[性能测试生产者] 发布序列号: {}", sequence_perf); // Verbose logging
+            //println!("[性能测试生产者] 发布序列号: {}", sequence_perf); // Verbose logging
         }
         claim_guard_perf.publish();
     }
