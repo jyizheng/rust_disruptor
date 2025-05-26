@@ -41,9 +41,9 @@ impl<T: Event, W: WaitStrategy> Consumer<T, W> {
     }
 
     /// Processes the next available event from the RingBuffer.
-    pub fn process_event<F>(&self, event_handler: F) -> Option<i64>
+    pub fn process_event<F>(&self, mut event_handler: F) -> Option<i64>
     where
-        F: Fn(&T), 
+        F: FnMut(&T), 
     {
         let next_sequence_to_consume = self.sequence.get() + 1; 
 
