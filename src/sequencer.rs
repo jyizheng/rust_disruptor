@@ -58,6 +58,13 @@ impl PaddedAtomicI64 {
     }
 }
 
+// In src/sequencer.rs or a new src/producer_mode.rs
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProducerMode {
+    Single,
+    Multi,
+}
 
 // --- Sequencer Struct ---
 pub struct Sequencer {
@@ -68,10 +75,11 @@ pub struct Sequencer {
     index_shift: i64,
     available_buffer: Vec<PaddedAtomicI64>, // <-- MODIFIED: Use PaddedAtomicI64
     wait_strategy: Arc<dyn WaitStrategy>,
+    producer_mode: ProducerMode, // <-- New field
 }
 
 impl Sequencer {
-    pub fn new(buffer_size: usize, wait_strategy: Arc<dyn WaitStrategy>) -> Self {
+    pub fn new(buffer_size: usize, wait_strategy: Arc<dyn WaitStrategy>, producer_mode: ProducerMode) -> Self {
         assert!(buffer_size > 0, "Buffer size must be greater than 0");
         assert!(buffer_size.is_power_of_two(), "Buffer size must be a power of two");
 
@@ -92,6 +100,7 @@ impl Sequencer {
             index_shift,
             available_buffer: available_buffer_init, // <-- MODIFIED
             wait_strategy,
+            producer_mode, // <-- Store it
         }
     }
 
@@ -104,6 +113,79 @@ impl Sequencer {
     }
 
     pub fn next_batch(self: &Arc<Self>, delta: i64) -> ClaimedSequenceGuard {
+        if delta <= 0 || delta > self.buffer_size {
+            panic!("Delta must be greater than 0 and less than or equal to buffer size.");
+        }
+
+        let claimed_sequence_end = match self.producer_mode {
+            ProducerMode::Single => self.claim_sequence_single_producer(delta),
+            ProducerMode::Multi => self.claim_sequence_multi_producer(delta),
+        };
+
+        ClaimedSequenceGuard::new(claimed_sequence_end, Arc::clone(self))
+    }
+
+    /// Claims a sequence range for a single producer.
+    /// No CAS loop needed for producer_cursor update, but still waits for consumers.
+    fn claim_sequence_single_producer(self: &Arc<Self>, delta: i64) -> i64 {
+        let current_producer_val = self.producer_cursor.get();
+        let next_high_sequence = current_producer_val + delta;
+        let wrap_point = next_high_sequence - self.buffer_size;
+
+        // Wait for consumers to advance if the buffer is about to wrap
+        // This ensures the slot to be claimed is available (not yet overwritten)
+        while wrap_point > self.get_minimum_gating_sequence() {
+            // This spin waits for the slowest consumer to pass the point that would be overwritten.
+            // In a high-contention or long-wait scenario, a more sophisticated wait (e.g., yield or park)
+            // could be considered, but spin_loop is common for short waits in producer paths.
+            hint::spin_loop();
+        }
+
+        // Single producer can directly set the cursor after ensuring space.
+        self.producer_cursor.set(next_high_sequence);
+        next_high_sequence
+    }
+
+    /// Claims a sequence range for multiple producers using CAS.
+    fn claim_sequence_multi_producer(self: &Arc<Self>, delta: i64) -> i64 {
+            let mut current_claimed;
+            let mut claimed_sequence_end;
+            let mut attempts = 0;
+    
+            loop {
+                current_claimed = self.producer_cursor.get();
+                claimed_sequence_end = current_claimed + delta;
+    
+                let wrap_point = claimed_sequence_end - self.buffer_size;
+                let min_gating_sequence = self.get_minimum_gating_sequence();
+    
+                if wrap_point > min_gating_sequence {
+                    attempts += 1;
+                    if attempts > 1_000_000 { // Heuristic to prevent overly tight spin
+                        std::thread::yield_now();
+                        attempts = 0;
+                    }
+                    hint::spin_loop();
+                    continue;
+                }
+    
+                // Attempt to claim the sequence range using Compare-And-Swap
+                match self.producer_cursor.0.compare_exchange(
+                    current_claimed,
+                    claimed_sequence_end,
+                    Ordering::SeqCst, // Strongest ordering for claiming
+                    Ordering::Acquire, // Weaker ordering on failure is fine
+                ) {
+                    Ok(_) => break, // Successfully claimed
+                    Err(_) => {
+                        hint::spin_loop(); // Spin and retry on contention
+                    }
+                }
+            }
+            claimed_sequence_end
+    }
+
+    /*pub fn next_batch(self: &Arc<Self>, delta: i64) -> ClaimedSequenceGuard {
         if delta <= 0 || delta > self.buffer_size {
             panic!("Delta must be greater than 0 and less than or equal to buffer size.");
         }
@@ -148,6 +230,7 @@ impl Sequencer {
 
         ClaimedSequenceGuard::new(claimed_sequence_end, Arc::clone(self))
     }
+    */
 
     fn mark_sequence_as_published(self: &Arc<Self>, sequence: i64) {
         let index = (sequence & self.index_mask) as usize;

@@ -20,6 +20,7 @@ use crate::wait_strategy::{BusySpinWaitStrategy, YieldingWaitStrategy, BlockingW
 use crate::disruptor::Disruptor;
 use crate::sequencer::{Sequencer, Sequence, ClaimedSequenceGuard}; 
 use crate::ring_buffer::RingBuffer; 
+use crate::sequencer::ProducerMode; 
 use crate::producer::Producer; 
 use crate::consumer::Consumer;
 use crate::wait_strategy::WaitStrategy;
@@ -90,7 +91,11 @@ fn basic_test() {
 
     const BUFFER_SIZE_BASIC: usize = 16; 
     // WaitStrategy 类型现在是泛型参数，需要传递实例
-    let mut disruptor_basic = Disruptor::<MyEvent, BusySpinWaitStrategy>::new(BUFFER_SIZE_BASIC, BusySpinWaitStrategy::default()); 
+    let mut disruptor_basic = Disruptor::<MyEvent, BusySpinWaitStrategy>::new(
+        BUFFER_SIZE_BASIC,
+        BusySpinWaitStrategy::default(),
+        ProducerMode::Multi // <-- Specify Multi
+    );
 
     let producer1_basic = disruptor_basic.create_producer(); 
     let producer2_basic = disruptor_basic.create_producer();
@@ -172,19 +177,75 @@ fn basic_test() {
     println!("Rust Disruptor 基础多生产者多消费者示例完成。");
 }
 
+// --- Consumer Task Function (Revised for Performance Test) ---
+fn consumer_task_perf_test(
+    consumer: Consumer<MyEvent, BusySpinWaitStrategy>, // Or make W generic if needed
+    accumulated_sum_perf: Arc<AtomicU64>,
+    iterations_to_process: u64,
+    tx_perf: mpsc::Sender<()>, // For signaling completion
+) {
+    println!("[性能测试消费者] 消费者线程启动。");
+    let mut processed_count_perf = 0;
+
+    while processed_count_perf < iterations_to_process {
+        let next_sequence_to_try = consumer.sequence.get() + 1;
+
+        // Wait for the next batch of events.
+        // consumer.gating_sequences_for_wait for a single consumer (no other dependencies)
+        // will correctly contain the producer's cursor.
+        let highest_available_by_wait_strategy = consumer.wait_strategy.wait_for(
+            next_sequence_to_try,
+            Arc::clone(&consumer.sequencer),
+            &consumer.gating_sequences_for_wait,
+            Arc::clone(&consumer.sequence), // Consumer's own sequence object
+        );
+
+        // highest_available_by_wait_strategy is the highest sequence this consumer can process now.
+        if highest_available_by_wait_strategy >= next_sequence_to_try {
+            for seq_to_process in next_sequence_to_try..=highest_available_by_wait_strategy {
+                if processed_count_perf >= iterations_to_process { // Ensure we don't overshoot total
+                    break;
+                }
+                unsafe {
+                    let event_perf = consumer.ring_buffer.get(seq_to_process);
+                    // Using Relaxed ordering for sum accumulation can be faster if strict sequencing
+                    // of the sum relative to other operations isn't critical at each step.
+                    // The final sum will still be correct.
+                    accumulated_sum_perf.fetch_add(event_perf.value, Ordering::Relaxed);
+                }
+                processed_count_perf += 1;
+            }
+            // IMPORTANT: Update the consumer's sequence to the last successfully processed event in the batch.
+            consumer.sequence.set(highest_available_by_wait_strategy);
+        }
+        // If highest_available_by_wait_strategy < next_sequence_to_try,
+        // it means wait_for likely spun/blocked and then found nothing immediately ready *up to next_sequence_to_try*.
+        // The loop will continue, and wait_for will be called again. This is normal.
+    }
+
+    println!("[性能测试消费者] 处理了所有 {} 个事件。退出。", iterations_to_process);
+    if tx_perf.send(()).is_err() {
+        eprintln!("[性能测试消费者] 无法发送完成信号。接收端可能已关闭。");
+    }
+    println!("[性能测试消费者] 消费者线程完成。");
+}
 
 // --- Performance Test Function: OneToOneSequencedThroughputTest ---
 fn run_one_to_one_throughput_test() {
     println!("\n--- 运行一对一有序吞吐量测试 ---");
 
-    const BUFFER_SIZE_PERF: usize = 1024 * 1; // 65536
-    const ITERATIONS_PERF: u64 = 100_0000; // Adjust this to test the stall scenario
+    const BUFFER_SIZE_PERF: usize = 65536;
+    const ITERATIONS_PERF: u64 = 100_000_000; // Adjust this to test the stall scenario
     // const ITERATIONS_PERF: u64 = 100_000_000; // Original high-throughput test value
     
     let expected_sum_perf: u64 = (ITERATIONS_PERF * (ITERATIONS_PERF - 1)) / 2;
 
     // --- 修正点：使用 BlockingWaitStrategy 来验证活锁问题 ---
-    let mut disruptor_perf = Disruptor::<MyEvent, BusySpinWaitStrategy>::new(BUFFER_SIZE_PERF, BusySpinWaitStrategy::default());
+    let mut disruptor_perf = Disruptor::<MyEvent, BusySpinWaitStrategy>::new(
+        BUFFER_SIZE_PERF,
+        BusySpinWaitStrategy::default(),
+        ProducerMode::Single // <-- Specify Single
+    );
     let producer_perf = disruptor_perf.create_producer(); 
     // 单个消费者，无依赖
     let consumer_perf = disruptor_perf.create_consumer(vec![]); 
@@ -194,41 +255,15 @@ fn run_one_to_one_throughput_test() {
 
     let consumer_thread_sum_clone_perf = Arc::clone(&accumulated_sum_perf);
     let consumer_thread_tx_clone_perf = tx_perf;
+
     let consumer_handle_perf = thread::spawn(move || {
-        println!("[性能测试消费者] 消费者线程启动。");
-        let mut processed_count_perf = 0;
-        let mut last_sequence_processed_perf = -1;
-
-        loop {
-            let highest_available_perf = consumer_perf.sequencer.get_highest_available_sequence(last_sequence_processed_perf);
-
-            if highest_available_perf > last_sequence_processed_perf {
-                let next_sequence_to_consume_perf = last_sequence_processed_perf + 1;
-
-                unsafe {
-                    let event_perf = consumer_perf.ring_buffer.get(next_sequence_to_consume_perf);
-                    consumer_thread_sum_clone_perf.fetch_add(event_perf.value, Ordering::SeqCst);
-                    //println!("[性能测试消费者] 消费序列号: {}, 值: {}", next_sequence_to_consume_perf, event_perf.value); // Verbose logging
-                }
-                last_sequence_processed_perf = next_sequence_to_consume_perf;
-                consumer_perf.sequence.set(last_sequence_processed_perf);   // ← ☆ 关键补写
-                processed_count_perf += 1;
-
-                if processed_count_perf >= ITERATIONS_PERF {
-                    println!("[性能测试消费者] 处理了所有 {} 个事件。退出。", ITERATIONS_PERF);
-                    break; 
-                }
-            } else {
-                consumer_perf.wait_strategy.wait_for(
-                    last_sequence_processed_perf + 1, 
-                    Arc::clone(&consumer_perf.sequencer), // Correctly passing Arc<Sequencer>
-                    &consumer_perf.gating_sequences_for_wait, 
-                    consumer_perf.sequence.clone(), 
-                );
-            }
-        }
-        consumer_thread_tx_clone_perf.send(()).expect("Could not send completion signal");
-        println!("[性能测试消费者] 消费者线程完成。");
+        // Ensure you call the revised task function
+        consumer_task_perf_test(
+            consumer_perf, // This is the Consumer<MyEvent, BusySpinWaitStrategy>
+            consumer_thread_sum_clone_perf,
+            ITERATIONS_PERF,
+            consumer_thread_tx_clone_perf
+        );
     });
 
     println!("[性能测试生产者] 生产者线程启动。");

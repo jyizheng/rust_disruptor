@@ -2,36 +2,49 @@
 
 use crate::event::Event;
 use crate::ring_buffer::RingBuffer;
-use crate::sequencer::{Sequence, Sequencer}; 
+use crate::sequencer::{Sequence, Sequencer, ProducerMode}; 
 use crate::wait_strategy::WaitStrategy; 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Disruptor<T: Event, W: WaitStrategy> {
     ring_buffer: Arc<RingBuffer<T>>,
     sequencer: Arc<Sequencer>,
     wait_strategy_arc: Arc<dyn WaitStrategy>,
     concrete_wait_strategy: W, // <-- 新增字段
+    producer_mode: ProducerMode, // <-- New field
+    // Optional: To enforce only one producer instance in Single mode
+    producer_created: AtomicBool,
 }
 
 impl<T: Event, W: WaitStrategy> Disruptor<T, W> where W: Clone {
-    pub fn new(capacity: usize, wait_strategy: W) -> Self {
+    pub fn new(capacity: usize, wait_strategy: W,  producer_mode: ProducerMode) -> Self {
         let ring_buffer = Arc::new(RingBuffer::new(capacity));
         
         let concrete_wait_strategy_clone = wait_strategy.clone(); 
 
         let wait_strategy_arc = Arc::new(wait_strategy) as Arc<dyn WaitStrategy>; 
 
-        let sequencer = Arc::new(Sequencer::new(capacity, Arc::clone(&wait_strategy_arc)));
+        let sequencer = Arc::new(Sequencer::new(capacity, Arc::clone(&wait_strategy_arc), producer_mode));
 
         Disruptor {
             ring_buffer,
             sequencer,
             wait_strategy_arc,
             concrete_wait_strategy: concrete_wait_strategy_clone,
+            producer_mode, // <-- Store producer_mode
+            producer_created: AtomicBool::new(false),
         }
     }
 
     pub fn create_producer(&self) -> crate::producer::Producer<T> {
+        // Optional: Enforce that create_producer is called only once for SingleProducer mode
+        if self.producer_mode == ProducerMode::Single {
+            if self.producer_created.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+                panic!("Cannot create more than one producer in SingleProducer mode.");
+            }
+        }
+
         crate::producer::Producer::new(
             Arc::clone(&self.sequencer),
             Arc::clone(&self.ring_buffer),
