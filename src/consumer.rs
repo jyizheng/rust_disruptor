@@ -1,7 +1,6 @@
 // src/consumer.rs
 
 use std::sync::Arc;
-use std::ops::Fn; 
 use crate::event::Event;
 use crate::ring_buffer::RingBuffer;
 use crate::sequencer::{Sequencer, Sequence};
@@ -56,10 +55,8 @@ impl<T: Event, W: WaitStrategy> Consumer<T, W> {
         );
 
         if next_sequence_to_consume <= available_sequence {
-            unsafe {
-                let event = self.ring_buffer.get(next_sequence_to_consume);
-                event_handler(event); 
-            }
+            let event = self.ring_buffer.get(next_sequence_to_consume);
+            event_handler(event); 
             
             self.sequence.set(next_sequence_to_consume);
             Some(next_sequence_to_consume)

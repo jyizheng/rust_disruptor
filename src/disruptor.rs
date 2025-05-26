@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub struct Disruptor<T: Event, W: WaitStrategy> {
     ring_buffer: Arc<RingBuffer<T>>,
     sequencer: Arc<Sequencer>,
-    wait_strategy_arc: Arc<dyn WaitStrategy>,
+    //wait_strategy_arc: Arc<dyn WaitStrategy>,
     concrete_wait_strategy: W, // <-- 新增字段
     producer_mode: ProducerMode, // <-- New field
     // Optional: To enforce only one producer instance in Single mode
@@ -23,14 +23,17 @@ impl<T: Event, W: WaitStrategy> Disruptor<T, W> where W: Clone {
         
         let concrete_wait_strategy_clone = wait_strategy.clone(); 
 
-        let wait_strategy_arc = Arc::new(wait_strategy) as Arc<dyn WaitStrategy>; 
+        //let wait_strategy_arc = Arc::new(wait_strategy) as Arc<dyn WaitStrategy>;
+        // Create the Arc<dyn WaitStrategy> to pass to the Sequencer
+        let wait_strategy_for_sequencer = Arc::new(wait_strategy) as Arc<dyn WaitStrategy>;
 
-        let sequencer = Arc::new(Sequencer::new(capacity, Arc::clone(&wait_strategy_arc), producer_mode));
+
+        let sequencer = Arc::new(Sequencer::new(capacity, Arc::clone(&wait_strategy_for_sequencer), producer_mode));
 
         Disruptor {
             ring_buffer,
             sequencer,
-            wait_strategy_arc,
+            //wait_strategy_arc,
             concrete_wait_strategy: concrete_wait_strategy_clone,
             producer_mode, // <-- Store producer_mode
             producer_created: AtomicBool::new(false),

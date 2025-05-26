@@ -1,12 +1,10 @@
 // src/bin/basic_main.rs
 
-// Replace `your_crate_name` with the actual name of your crate from Cargo.toml
-// e.g., if your crate is named "rust_disruptor", use `rust_disruptor::event::MyEvent;`
 use rust_disruptor::consumer::Consumer;
 use rust_disruptor::disruptor::Disruptor;
 use rust_disruptor::event::MyEvent;
 use rust_disruptor::producer::Producer;
-use rust_disruptor::sequencer::{ProducerMode, Sequence}; // Assuming Sequence might be needed for Arc clones
+use rust_disruptor::sequencer::{ProducerMode};
 use rust_disruptor::wait_strategy::BusySpinWaitStrategy;
 
 use std::collections::HashSet;

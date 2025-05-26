@@ -2,12 +2,10 @@
 
 use std::sync::Arc;
 use std::marker::PhantomData;
-use std::thread;
-use std::time::Duration;
 
-use crate::event::{Event, MyEvent}; 
+use crate::event::{Event}; 
 use crate::ring_buffer::RingBuffer; 
-use crate::sequencer::{Sequencer, Sequence, ClaimedSequenceGuard}; 
+use crate::sequencer::{Sequencer, ClaimedSequenceGuard}; 
 
 pub struct Producer<T: Event> {
     pub sequencer: Arc<Sequencer>,

@@ -1,4 +1,4 @@
-use crate::event::{Event, MyEvent};
+use crate::event::{Event};
 use std::cell::UnsafeCell; // New import!
 
 pub struct RingBuffer<T: Event> {

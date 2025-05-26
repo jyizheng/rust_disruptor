@@ -1,6 +1,6 @@
 // src/sequencer.rs
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::hint;
