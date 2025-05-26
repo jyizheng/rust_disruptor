@@ -8,6 +8,7 @@ use crate::wait_strategy::WaitStrategy;
 
 // --- Sequence Struct ---
 #[derive(Debug)]
+#[repr(align(64))] // <-- Add cache line alignment
 pub struct Sequence(AtomicI64);
 
 impl Sequence {
@@ -27,14 +28,6 @@ impl Sequence {
         self.0.fetch_add(delta, Ordering::SeqCst) // fetch_add returns previous value
     }
 }
-
-// --- Cache Padded AtomicI64 to prevent false sharing ---
-// Common cache line sizes are 64 or 128 bytes.
-// Using 64 here as a common default.
-#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), target_pointer_width = "64"))]
-const CACHE_LINE_SIZE: usize = 64;
-#[cfg(not(all(any(target_arch = "x86_64", target_arch = "aarch64"), target_pointer_width = "64")))]
-const CACHE_LINE_SIZE: usize = 64; // Default, consider platform specifics
 
 #[derive(Debug)]
 #[repr(align(64))]
