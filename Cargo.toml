@@ -9,3 +9,16 @@ edition = "2024"
 lto = true
 # codegen-units = 1 # Can sometimes improve optimizations at the cost of longer compile times
 # panic = 'abort'   # Can slightly reduce binary size and overhead if panics are not expected to be caught
+
+
+[lib]
+name = "rust_disruptor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "basic_main"
+path = "src/bin/basic_main.rs"
+
+[[bin]]
+name = "perf_main"
+path = "src/bin/perf_main.rs"
