@@ -154,9 +154,6 @@ impl WaitStrategy for YieldingWaitStrategy {
 pub struct PhasedBackoffWaitStrategy {
     spin_timeout: Duration,
     yield_timeout: Duration,
-    
-    busy_spin_strategy: BusySpinWaitStrategy,
-    yielding_strategy: YieldingWaitStrategy, 
     blocking_strategy: BlockingWaitStrategy, 
 }
 
@@ -164,15 +161,11 @@ impl PhasedBackoffWaitStrategy {
     pub fn new(
         spin_timeout: Duration,
         yield_timeout: Duration,
-        busy_spin_strategy: BusySpinWaitStrategy,
-        yielding_strategy: YieldingWaitStrategy, 
         blocking_strategy: BlockingWaitStrategy,
     ) -> Self {
         PhasedBackoffWaitStrategy {
             spin_timeout,
             yield_timeout,
-            busy_spin_strategy,
-            yielding_strategy, 
             blocking_strategy,
         }
     }

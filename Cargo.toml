@@ -10,6 +10,9 @@ lto = true
 # codegen-units = 1 # Can sometimes improve optimizations at the cost of longer compile times
 # panic = 'abort'   # Can slightly reduce binary size and overhead if panics are not expected to be caught
 
+[features]
+default = []
+phased_backoff_test = []
 
 [lib]
 name = "rust_disruptor"
