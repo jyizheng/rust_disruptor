@@ -1,6 +1,7 @@
 // src/sequencer.rs
 
 use std::sync::{Arc, Mutex};
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::hint;
 
@@ -16,10 +17,12 @@ impl Sequence {
         Sequence(AtomicI64::new(initial_value))
     }
 
+    #[inline(always)]
     pub fn get(&self) -> i64 {
         self.0.load(Ordering::Acquire)
     }
 
+    #[inline(always)]
     pub fn set(&self, value: i64) {
         self.0.store(value, Ordering::Release);
     }
@@ -69,6 +72,8 @@ pub struct Sequencer {
     available_buffer: Vec<PaddedAtomicI64>, // <-- MODIFIED: Use PaddedAtomicI64
     wait_strategy: Arc<dyn WaitStrategy>,
     producer_mode: ProducerMode, // <-- New field
+    // --- New field for SPSC fast path ---
+    single_consumer_gate_cache: RwLock<Option<Arc<Sequence>>>,
 }
 
 impl Sequencer {
@@ -94,11 +99,21 @@ impl Sequencer {
             available_buffer: available_buffer_init, // <-- MODIFIED
             wait_strategy,
             producer_mode, // <-- Store it
+            single_consumer_gate_cache: RwLock::new(None), // Initialize new cache
         }
     }
 
     pub fn add_gating_sequence(&self, sequence: Arc<Sequence>) {
-        self.gating_sequences.lock().unwrap().push(sequence);
+        let mut gating_sequences_guard = self.gating_sequences.lock().unwrap();
+        gating_sequences_guard.push(Arc::clone(&sequence));
+
+        // Update the single consumer cache
+        let mut cache_writer = self.single_consumer_gate_cache.write().unwrap();
+        if self.producer_mode == ProducerMode::Single && gating_sequences_guard.len() == 1 {
+            *cache_writer = Some(sequence); // Cache the single sequence
+        } else {
+            *cache_writer = None; // Invalidate cache if not SPSC or multiple consumers
+        }
     }
 
     pub fn next(self: &Arc<Self>) -> ClaimedSequenceGuard {
@@ -234,6 +249,21 @@ impl Sequencer {
     }
 
     pub fn get_minimum_gating_sequence(&self) -> i64 {
+        // --- SPSC Fast Path ---
+        if self.producer_mode == ProducerMode::Single {
+            // Try to get a read lock on the cache.
+            if let Ok(cache_reader) = self.single_consumer_gate_cache.read() {
+                // cache_reader is an RwLockReadGuard<Option<Arc<Sequence>>>
+                // We need to get an Option<&Arc<Sequence>> from it to access the Arc<Sequence>
+                if let Some(cached_arc_sequence) = cache_reader.as_ref() {
+                    // cached_arc_sequence is now &Arc<Sequence>
+                    return cached_arc_sequence.get();
+                }
+            }
+            // If cache_reader fails (poisoned RwLock) or cache is None,
+            // fall through to the general path.
+        }
+
         let gating_sequences_guard = self.gating_sequences.lock().unwrap();
         if gating_sequences_guard.is_empty() {
             // If no consumers, the "barrier" is effectively the producer's own cursor,

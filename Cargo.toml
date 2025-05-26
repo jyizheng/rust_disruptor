@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[profile.release]
+lto = true
+# codegen-units = 1 # Can sometimes improve optimizations at the cost of longer compile times
+# panic = 'abort'   # Can slightly reduce binary size and overhead if panics are not expected to be caught
