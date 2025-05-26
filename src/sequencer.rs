@@ -193,53 +193,6 @@ impl Sequencer {
             claimed_sequence_end
     }
 
-    /*pub fn next_batch(self: &Arc<Self>, delta: i64) -> ClaimedSequenceGuard {
-        if delta <= 0 || delta > self.buffer_size {
-            panic!("Delta must be greater than 0 and less than or equal to buffer size.");
-        }
-
-        let mut current_claimed;
-        let mut claimed_sequence_end;
-        let mut attempts = 0; // To prevent potential infinite spin in some edge cases if logic is flawed
-
-        loop {
-            current_claimed = self.producer_cursor.get();
-            claimed_sequence_end = current_claimed + delta;
-
-            let wrap_point = claimed_sequence_end - self.buffer_size;
-            let min_gating_sequence = self.get_minimum_gating_sequence();
-
-            if wrap_point > min_gating_sequence {
-                attempts += 1;
-                if attempts > 1_000_000 { // Heuristic to prevent overly tight spin, adjust as needed
-                    std::thread::yield_now(); // Yield if spinning too long
-                    attempts = 0; // Reset attempts after yielding
-                }
-                hint::spin_loop();
-                continue;
-            }
-
-            // Attempt to claim the sequence range
-            // Using compare_exchange_weak for potentially better performance in contended loops,
-            // but requires a loop for spurious failures. Strong is simpler to reason about.
-            // Sticking with strong as per original.
-            match self.producer_cursor.0.compare_exchange(
-                current_claimed,
-                claimed_sequence_end,
-                Ordering::SeqCst, // Strongest ordering for claiming
-                Ordering::Acquire, // Weaker ordering on failure is fine
-            ) {
-                Ok(_) => break, // Successfully claimed
-                Err(_) => {
-                    hint::spin_loop(); // Spin and retry
-                }
-            }
-        }
-
-        ClaimedSequenceGuard::new(claimed_sequence_end, Arc::clone(self))
-    }
-    */
-
     fn mark_sequence_as_published(self: &Arc<Self>, sequence: i64) {
         let index = (sequence & self.index_mask) as usize;
         let flag_value = sequence >> self.index_shift;
