@@ -1,11 +1,11 @@
-// src/main.rs
-
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::collections::HashSet;
 use std::sync::Mutex;
+use std::sync::mpsc;
 
+// Declare modules
 mod event;         
 mod sequencer;     
 mod ring_buffer;   
@@ -14,13 +14,17 @@ mod producer;
 mod consumer;      
 mod disruptor;     
 
+// Import necessary types
 use crate::event::MyEvent;
-use crate::wait_strategy::BusySpinWaitStrategy; 
+use crate::wait_strategy::{BusySpinWaitStrategy, YieldingWaitStrategy, BlockingWaitStrategy, PhasedBackoffWaitStrategy}; // 引入所有等待策略
 use crate::disruptor::Disruptor;
 use crate::sequencer::{Sequencer, Sequence, ClaimedSequenceGuard}; 
 use crate::ring_buffer::RingBuffer; 
 use crate::producer::Producer; 
-use crate::consumer::Consumer; 
+use crate::consumer::Consumer;
+use crate::wait_strategy::WaitStrategy;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 // --- Producer Task Function ---
 fn producer_task(producer: Producer<MyEvent>, id: usize, fail_on_sequence: Option<u64>) {
@@ -54,7 +58,7 @@ fn producer_task(producer: Producer<MyEvent>, id: usize, fail_on_sequence: Optio
 
 // --- Consumer Task Function ---
 fn consumer_task(
-    consumer: Consumer<MyEvent, BusySpinWaitStrategy>, 
+    consumer: Consumer<MyEvent, BusySpinWaitStrategy>, // 这里的 WaitStrategy 类型应该与 Disruptor 实例一致
     processed_values_clone: Arc<Mutex<Vec<u64>>>, 
     id: usize, 
     total_events_to_consume: u64,
@@ -80,98 +84,195 @@ fn consumer_task(
     println!("[消费者 {}] 消费者线程完成。", id);
 }
 
-// --- Main Function ---
-fn main() {
-    println!("启动 Rust 中的 LMAX Disruptor 模拟示例...");
+// --- Basic Multi-Producer Multi-Consumer Test Function ---
+fn basic_test() {
+    println!("\n--- 运行基础多生产者多消费者示例 ---");
 
-    const BUFFER_SIZE: usize = 16;
-    let mut disruptor = Disruptor::<MyEvent, BusySpinWaitStrategy>::new(BUFFER_SIZE, BusySpinWaitStrategy::default()); 
+    const BUFFER_SIZE_BASIC: usize = 16; 
+    // WaitStrategy 类型现在是泛型参数，需要传递实例
+    let mut disruptor_basic = Disruptor::<MyEvent, BusySpinWaitStrategy>::new(BUFFER_SIZE_BASIC, BusySpinWaitStrategy::default()); 
 
-    let producer1 = disruptor.create_producer(); 
-    let producer2 = disruptor.create_producer();
+    let producer1_basic = disruptor_basic.create_producer(); 
+    let producer2_basic = disruptor_basic.create_producer();
 
-    // --- 创建独立的消费者 C1 和 C2 (不依赖其他消费者) ---
-    let consumer1 = disruptor.create_consumer(vec![]); // 空 Vec 表示没有依赖
-    let consumer2 = disruptor.create_consumer(vec![]); 
+    // 创建消费者时，传递 Vec<Arc<Sequence>> 作为依赖 (空 Vec 表示无依赖)
+    let consumer1_basic = disruptor_basic.create_consumer(vec![]); 
+    let consumer2_basic = disruptor_basic.create_consumer(vec![]); 
 
-    // --- 修正点：创建消费者 C3，依赖于 C1 和 C2 ---
-    let consumer3 = disruptor.create_consumer(vec![
-        // 克隆 C1 的序列号
-        Arc::clone(&consumer1.sequence), 
-        // 克隆 C2 的序列号
-        Arc::clone(&consumer2.sequence), 
+    let consumer3_basic = disruptor_basic.create_consumer(vec![
+        Arc::clone(&consumer1_basic.sequence), 
+        Arc::clone(&consumer2_basic.sequence), 
     ]);
 
-    // 为每个消费者准备数据收集器
-    let processed_values_c1 = Arc::new(Mutex::new(Vec::<u64>::new())); 
-    let processed_values_c1_clone = Arc::clone(&processed_values_c1);
+    let processed_values_c1_basic = Arc::new(Mutex::new(Vec::<u64>::new())); 
+    let processed_values_c1_clone_basic = Arc::clone(&processed_values_c1_basic);
 
-    let processed_values_c2 = Arc::new(Mutex::new(Vec::<u64>::new())); 
-    let processed_values_c2_clone = Arc::clone(&processed_values_c2);
+    let processed_values_c2_basic = Arc::new(Mutex::new(Vec::<u64>::new())); 
+    let processed_values_c2_clone_basic = Arc::clone(&processed_values_c2_basic);
 
-    let processed_values_c3 = Arc::new(Mutex::new(Vec::<u64>::new())); // C3 的收集器
-    let processed_values_c3_clone = Arc::clone(&processed_values_c3);
+    let processed_values_c3_basic = Arc::new(Mutex::new(Vec::<u64>::new())); 
+    let processed_values_c3_clone_basic = Arc::clone(&processed_values_c3_basic);
 
 
-    const NUM_EVENTS_PER_PRODUCER: usize = 10;
-    const TOTAL_EVENTS: usize = NUM_EVENTS_PER_PRODUCER * 2; 
+    const NUM_EVENTS_PER_PRODUCER_BASIC: usize = 10;
+    const TOTAL_EVENTS_BASIC: usize = NUM_EVENTS_PER_PRODUCER_BASIC * 2; 
 
-    // --- 启动消费者线程 ---
-    let consumer1_handle = thread::spawn(move || {
-        consumer_task(consumer1, processed_values_c1_clone, 1, TOTAL_EVENTS as u64); 
+    let consumer1_handle_basic = thread::spawn(move || {
+        consumer_task(consumer1_basic, processed_values_c1_clone_basic, 1, TOTAL_EVENTS_BASIC as u64); 
     });
 
-    let consumer2_handle = thread::spawn(move || {
-        consumer_task(consumer2, processed_values_c2_clone, 2, TOTAL_EVENTS as u64); 
+    let consumer2_handle_basic = thread::spawn(move || {
+        consumer_task(consumer2_basic, processed_values_c2_clone_basic, 2, TOTAL_EVENTS_BASIC as u64); 
     });
 
-    // --- 修正点：启动消费者 C3 线程 ---
-    let consumer3_handle = thread::spawn(move || {
-        consumer_task(consumer3, processed_values_c3_clone, 3, TOTAL_EVENTS as u64); 
+    let consumer3_handle_basic = thread::spawn(move || {
+        consumer_task(consumer3_basic, processed_values_c3_clone_basic, 3, TOTAL_EVENTS_BASIC as u64); 
     });
 
 
-    // 启动生产者线程
-    let producer1_handle = thread::spawn(move || {
-        producer_task(producer1, 1, None); 
+    let producer1_handle_basic = thread::spawn(move || {
+        producer_task(producer1_basic, 1, None); 
     });
-    let producer2_handle = thread::spawn(move || {
+    let producer2_handle_basic = thread::spawn(move || {
         thread::sleep(Duration::from_millis(10));
-        producer_task(producer2, 2, None); 
+        producer_task(producer2_basic, 2, None); 
     });
 
 
-    // 等待所有线程完成
-    producer1_handle.join().expect("生产者 1 线程 panic");
-    producer2_handle.join().expect("生产者 2 线程 panic");
-    consumer1_handle.join().expect("消费者 1 线程 panic");
-    consumer2_handle.join().expect("消费者 2 线程 panic");
-    consumer3_handle.join().expect("消费者 3 线程 panic"); // 等待 C3
+    producer1_handle_basic.join().expect("生产者 1 线程 panic");
+    producer2_handle_basic.join().expect("生产者 2 线程 panic");
+    consumer1_handle_basic.join().expect("消费者 1 线程 panic");
+    consumer2_handle_basic.join().expect("消费者 2 线程 panic");
+    consumer3_handle_basic.join().expect("消费者 3 线程 panic"); 
 
-    // --- 修正点：合并并验证所有消费者的数据 ---
-    let mut combined_final_values: Vec<u64> = Vec::new();
-    combined_final_values.extend_from_slice(&processed_values_c1.lock().unwrap());
-    combined_final_values.extend_from_slice(&processed_values_c2.lock().unwrap());
-    combined_final_values.extend_from_slice(&processed_values_c3.lock().unwrap()); // 包含 C3 的数据
+    let mut combined_final_values_basic: Vec<u64> = Vec::new();
+    combined_final_values_basic.extend_from_slice(&processed_values_c1_basic.lock().unwrap());
+    combined_final_values_basic.extend_from_slice(&processed_values_c2_basic.lock().unwrap());
+    combined_final_values_basic.extend_from_slice(&processed_values_c3_basic.lock().unwrap()); 
     
-    combined_final_values.sort_unstable(); 
+    combined_final_values_basic.sort_unstable(); 
 
-    println!("\n所有事件已处理。最终收集到的值 (排序后，可能包含来自多个消费者的重复)：{:?}", combined_final_values);
+    println!("\n所有事件已处理。最终收集到的值 (排序后，可能包含来自多个消费者的重复)：{:?}", combined_final_values_basic);
 
-    let mut expected_values_set: HashSet<u64> = HashSet::new();
-    for i in 0..NUM_EVENTS_PER_PRODUCER {
-        expected_values_set.insert(i as u64); 
-        expected_values_set.insert((i + NUM_EVENTS_PER_PRODUCER) as u64); 
+    let mut expected_values_set_basic: HashSet<u64> = HashSet::new();
+    for i in 0..NUM_EVENTS_PER_PRODUCER_BASIC {
+        expected_values_set_basic.insert(i as u64); 
+        expected_values_set_basic.insert((i + NUM_EVENTS_PER_PRODUCER_BASIC) as u64); 
     }
 
-    let mut actual_unique_values_set = HashSet::new();
-    for &val in combined_final_values.iter() {
-        actual_unique_values_set.insert(val);
+    let mut actual_unique_values_set_basic = HashSet::new();
+    for &val in combined_final_values_basic.iter() {
+        actual_unique_values_set_basic.insert(val);
     }
 
-    assert_eq!(actual_unique_values_set.len(), TOTAL_EVENTS, "处理的唯一事件数量不正确。");
-    assert_eq!(actual_unique_values_set, expected_values_set, "处理的值集合与期望值集合不匹配。");
+    assert_eq!(actual_unique_values_set_basic.len(), TOTAL_EVENTS_BASIC, "处理的唯一事件数量不正确。");
+    assert_eq!(actual_unique_values_set_basic, expected_values_set_basic, "处理的值集合与期望值集合不匹配。");
     println!("断言通过：处理的值与期望值匹配且是唯一的。");
 
-    println!("Rust Disruptor 多生产者多消费者示例完成。");
+    println!("Rust Disruptor 基础多生产者多消费者示例完成。");
+}
+
+
+// --- Performance Test Function: OneToOneSequencedThroughputTest ---
+fn run_one_to_one_throughput_test() {
+    println!("\n--- 运行一对一有序吞吐量测试 ---");
+
+    const BUFFER_SIZE_PERF: usize = 1024 * 1; // 65536
+    const ITERATIONS_PERF: u64 = 8192; // Adjust this to test the stall scenario
+    // const ITERATIONS_PERF: u64 = 100_000_000; // Original high-throughput test value
+    
+    let expected_sum_perf: u64 = (ITERATIONS_PERF * (ITERATIONS_PERF - 1)) / 2;
+
+    // --- 修正点：使用 BlockingWaitStrategy 来验证活锁问题 ---
+    let mut disruptor_perf = Disruptor::<MyEvent, BlockingWaitStrategy>::new(BUFFER_SIZE_PERF, BlockingWaitStrategy::default());
+    let producer_perf = disruptor_perf.create_producer(); 
+    // 单个消费者，无依赖
+    let consumer_perf = disruptor_perf.create_consumer(vec![]); 
+
+    let accumulated_sum_perf = Arc::new(AtomicU64::new(0)); 
+    let (tx_perf, rx_perf) = mpsc::channel(); 
+
+    let consumer_thread_sum_clone_perf = Arc::clone(&accumulated_sum_perf);
+    let consumer_thread_tx_clone_perf = tx_perf;
+    let consumer_handle_perf = thread::spawn(move || {
+        println!("[性能测试消费者] 消费者线程启动。");
+        let mut processed_count_perf = 0;
+        let mut last_sequence_processed_perf = -1;
+
+        loop {
+            let highest_available_perf = consumer_perf.sequencer.get_highest_available_sequence(last_sequence_processed_perf);
+
+            if highest_available_perf > last_sequence_processed_perf {
+                let next_sequence_to_consume_perf = last_sequence_processed_perf + 1;
+
+                unsafe {
+                    let event_perf = consumer_perf.ring_buffer.get(next_sequence_to_consume_perf);
+                    consumer_thread_sum_clone_perf.fetch_add(event_perf.value, Ordering::SeqCst);
+                    println!("[性能测试消费者] 消费序列号: {}, 值: {}", next_sequence_to_consume_perf, event_perf.value); // Verbose logging
+                }
+                last_sequence_processed_perf = next_sequence_to_consume_perf;
+                processed_count_perf += 1;
+
+                if processed_count_perf >= ITERATIONS_PERF {
+                    println!("[性能测试消费者] 处理了所有 {} 个事件。退出。", ITERATIONS_PERF);
+                    break; 
+                }
+            } else {
+                consumer_perf.wait_strategy.wait_for(
+                    last_sequence_processed_perf + 1, 
+                    Arc::clone(&consumer_perf.sequencer), // Correctly passing Arc<Sequencer>
+                    &consumer_perf.gating_sequences_for_wait, 
+                    consumer_perf.sequence.clone(), 
+                );
+            }
+        }
+        consumer_thread_tx_clone_perf.send(()).expect("Could not send completion signal");
+        println!("[性能测试消费者] 消费者线程完成。");
+    });
+
+    println!("[性能测试生产者] 生产者线程启动。");
+    let start_time_perf = Instant::now();
+
+    for i in 0..ITERATIONS_PERF {
+        let claim_guard_perf = producer_perf.next();
+        let sequence_perf = claim_guard_perf.sequence();
+        unsafe {
+            let event_perf = producer_perf.get_mut(sequence_perf);
+            event_perf.value = i; 
+            println!("[性能测试生产者] 发布序列号: {}", sequence_perf); // Verbose logging
+        }
+        claim_guard_perf.publish();
+    }
+    println!("[性能测试生产者] 生产者线程完成。");
+
+    rx_perf.recv().expect("Failed to receive completion signal from consumer");
+    let end_time_perf = Instant::now();
+
+    let elapsed_ms = end_time_perf.duration_since(start_time_perf).as_millis() as u64;
+    let ops_per_second = (ITERATIONS_PERF * 1000) / elapsed_ms;
+
+    println!("\n--- 性能测试结果 ---");
+    println!("总迭代次数 (ITERATIONS): {}", ITERATIONS_PERF);
+    println!("缓冲区大小 (BUFFER_SIZE): {}", BUFFER_SIZE_PERF);
+    println!("耗时: {} ms", elapsed_ms);
+    println!("吞吐量: {} ops/sec", ops_per_second);
+
+    let final_sum = accumulated_sum_perf.load(Ordering::SeqCst);
+    println!("最终累加和: {}", final_sum);
+    println!("期望累加和: {}", expected_sum_perf);
+
+    assert_eq!(final_sum, expected_sum_perf, "累加结果不匹配！");
+    println!("断言通过：累加结果正确。");
+
+    consumer_handle_perf.join().expect("消费者线程 panic");
+}
+
+
+// --- Main Function ---
+fn main() {
+    // 运行基础多生产者多消费者示例
+    basic_test();
+
+    // 运行一对一有序吞吐量性能测试
+    run_one_to_one_throughput_test();
 }

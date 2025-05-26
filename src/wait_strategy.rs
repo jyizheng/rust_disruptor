@@ -1,6 +1,7 @@
 // src/wait_strategy.rs
 
 use crate::sequencer::Sequence;
+use crate::sequencer::Sequencer; // <-- 确保引入 Sequencer
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
 use std::hint;
@@ -8,32 +9,19 @@ use std::time::{Instant, Duration};
 
 /// Trait defining the interface for different wait strategies.
 pub trait WaitStrategy: Send + Sync + 'static {
-    /// Waits until all `gating_sequences` are greater than or equal to the `sequence`.
-    ///
-    /// # Arguments
-    /// * `sequence`: The target sequence number the consumer is trying to reach.
-    /// * `gating_sequences`: A slice of `Arc<Sequence>` representing all sequences
-    ///   that must be processed up to (or beyond) `sequence` before this consumer can proceed.
-    ///   This typically includes the producer's cursor and any upstream consumer sequences.
-    /// * `consumer_sequence`: The consumer's own current sequence.
-    ///
-    /// # Returns
-    /// The actual highest sequence number that has become available and meets all gating conditions.
     fn wait_for(
         &self,
         sequence: i64,
-        gating_sequences: &[Arc<Sequence>], // <-- 修改签名：现在是一个序列切片
+        sequencer: Arc<Sequencer>, // <-- 核心修正点：确保此参数存在
+        gating_sequences: &[Arc<Sequence>],
         consumer_sequence: Arc<Sequence>,
     ) -> i64;
 
-    /// Signals all waiting consumers that new events might be available.
     fn signal_all(&self);
 
-    /// Clones the trait object into a `Box<dyn WaitStrategy>`.
     fn clone_box(&self) -> Box<dyn WaitStrategy>;
 }
 
-// --- 为 `Box<dyn WaitStrategy>` 实现 Clone trait ---
 impl Clone for Box<dyn WaitStrategy> {
     fn clone(&self) -> Self {
         self.clone_box()
@@ -49,24 +37,25 @@ impl WaitStrategy for BusySpinWaitStrategy {
     fn wait_for(
         &self,
         sequence: i64,
-        gating_sequences: &[Arc<Sequence>], // <-- 修改签名
+        sequencer: Arc<Sequencer>, // <-- 核心修正点：确保此参数存在
+        gating_sequences: &[Arc<Sequence>], 
         _consumer_sequence: Arc<Sequence>, 
     ) -> i64 {
         loop {
-            // 获取所有门控序列中的最小值
-            let available_sequence = get_minimum_sequence(gating_sequences);
+            let min_gating_sequence = get_minimum_sequence(gating_sequences);
 
-            if available_sequence >= sequence {
-                return available_sequence; // 返回实际可用序列号
+            if min_gating_sequence >= sequence {
+                // 现在调用 sequencer.get_highest_available_sequence
+                let available_from_sequencer = sequencer.get_highest_available_sequence(sequence - 1);
+                if available_from_sequencer >= sequence {
+                    return available_from_sequencer; 
+                }
             }
-
             hint::spin_loop();
         }
     }
 
-    fn signal_all(&self) {
-        // 不需要显式信号
-    }
+    fn signal_all(&self) { }
 
     fn clone_box(&self) -> Box<dyn WaitStrategy> {
         Box::new(self.clone())
@@ -75,7 +64,7 @@ impl WaitStrategy for BusySpinWaitStrategy {
 
 
 /// A `WaitStrategy` that uses a `Condvar` to block consumer threads when no events are available.
-#[derive(Clone, Default)] // Default is now derived for simplicity
+#[derive(Clone, Default)]
 pub struct BlockingWaitStrategy {
     notification_pair: Arc<(Mutex<bool>, Condvar)>, 
 }
@@ -92,18 +81,22 @@ impl WaitStrategy for BlockingWaitStrategy {
     fn wait_for(
         &self,
         sequence: i64,
-        gating_sequences: &[Arc<Sequence>], // <-- 修改签名
+        sequencer: Arc<Sequencer>, // <-- 核心修正点：确保此参数存在
+        gating_sequences: &[Arc<Sequence>], 
         _consumer_sequence: Arc<Sequence>,
     ) -> i64 {
         let (lock, cvar) = &*self.notification_pair; 
         let mut ready_flag = lock.lock().unwrap(); 
 
         loop {
-            let available_sequence = get_minimum_sequence(gating_sequences);
+            let min_gating_sequence = get_minimum_sequence(gating_sequences);
 
-            if available_sequence >= sequence {
-                *ready_flag = false; 
-                return available_sequence; 
+            if min_gating_sequence >= sequence {
+                let available_from_sequencer = sequencer.get_highest_available_sequence(sequence - 1);
+                if available_from_sequencer >= sequence {
+                    *ready_flag = false; 
+                    return available_from_sequencer; 
+                }
             }
 
             ready_flag = cvar.wait(ready_flag).unwrap();
@@ -131,23 +124,24 @@ impl WaitStrategy for YieldingWaitStrategy {
     fn wait_for(
         &self,
         sequence: i64,
-        gating_sequences: &[Arc<Sequence>], // <-- 修改签名
+        sequencer: Arc<Sequencer>, // <-- 核心修正点：确保此参数存在
+        gating_sequences: &[Arc<Sequence>], 
         _consumer_sequence: Arc<Sequence>,
     ) -> i64 {
         loop {
-            let available_sequence = get_minimum_sequence(gating_sequences);
+            let min_gating_sequence = get_minimum_sequence(gating_sequences);
 
-            if available_sequence >= sequence {
-                return available_sequence;
+            if min_gating_sequence >= sequence {
+                let available_from_sequencer = sequencer.get_highest_available_sequence(sequence - 1);
+                if available_from_sequencer >= sequence {
+                    return available_from_sequencer;
+                }
             }
-
-            thread::yield_now();
+            thread::yield_now(); 
         }
     }
 
-    fn signal_all(&self) {
-        // 不需要显式信号
-    }
+    fn signal_all(&self) { }
 
     fn clone_box(&self) -> Box<dyn WaitStrategy> {
         Box::new(self.clone())
@@ -156,7 +150,7 @@ impl WaitStrategy for YieldingWaitStrategy {
 
 
 /// A `WaitStrategy` that combines busy-spinning, yielding, and blocking phases.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PhasedBackoffWaitStrategy {
     spin_timeout: Duration,
     yield_timeout: Duration,
@@ -164,18 +158,6 @@ pub struct PhasedBackoffWaitStrategy {
     busy_spin_strategy: BusySpinWaitStrategy,
     yielding_strategy: YieldingWaitStrategy, 
     blocking_strategy: BlockingWaitStrategy, 
-}
-
-impl Default for PhasedBackoffWaitStrategy {
-    fn default() -> Self {
-        Self::new(
-            Duration::from_micros(500), 
-            Duration::from_millis(5),  
-            BusySpinWaitStrategy::default(),
-            YieldingWaitStrategy::default(), 
-            BlockingWaitStrategy::default(),
-        )
-    }
 }
 
 impl PhasedBackoffWaitStrategy {
@@ -200,18 +182,20 @@ impl WaitStrategy for PhasedBackoffWaitStrategy {
     fn wait_for(
         &self,
         sequence: i64,
-        gating_sequences: &[Arc<Sequence>], // <-- 修改签名
+        sequencer: Arc<Sequencer>, // <-- 核心修正点：确保此参数存在
+        gating_sequences: &[Arc<Sequence>], 
         consumer_sequence: Arc<Sequence>, 
     ) -> i64 {
         // Phase 1: Busy Spin
         let spin_start_time = Instant::now();
         loop {
-            let available_sequence = get_minimum_sequence(gating_sequences);
-
-            if available_sequence >= sequence {
-                return available_sequence;
+            let min_gating_sequence = get_minimum_sequence(gating_sequences);
+            if min_gating_sequence >= sequence {
+                let available_from_sequencer = sequencer.get_highest_available_sequence(sequence - 1);
+                if available_from_sequencer >= sequence {
+                    return available_from_sequencer;
+                }
             }
-
             if spin_start_time.elapsed() > self.spin_timeout {
                 break; 
             }
@@ -221,12 +205,13 @@ impl WaitStrategy for PhasedBackoffWaitStrategy {
         // Phase 2: Yielding 
         let yield_start_time = Instant::now();
         loop {
-            let available_sequence = get_minimum_sequence(gating_sequences);
-
-            if available_sequence >= sequence {
-                return available_sequence;
+            let min_gating_sequence = get_minimum_sequence(gating_sequences);
+            if min_gating_sequence >= sequence {
+                let available_from_sequencer = sequencer.get_highest_available_sequence(sequence - 1);
+                if available_from_sequencer >= sequence {
+                    return available_from_sequencer;
+                }
             }
-
             if yield_start_time.elapsed() > self.yield_timeout {
                 break; 
             }
@@ -234,7 +219,7 @@ impl WaitStrategy for PhasedBackoffWaitStrategy {
         }
 
         // Phase 3: Blocking
-        self.blocking_strategy.wait_for(sequence, gating_sequences, consumer_sequence)
+        self.blocking_strategy.wait_for(sequence, sequencer, gating_sequences, consumer_sequence)
     }
 
     fn signal_all(&self) {
@@ -248,7 +233,6 @@ impl WaitStrategy for PhasedBackoffWaitStrategy {
 
 
 // --- 辅助函数：获取序列切片中的最小值 ---
-// 许多等待策略需要找到所有门控序列中的最小值
 fn get_minimum_sequence(sequences: &[Arc<Sequence>]) -> i64 {
     let mut min_sequence = i64::MAX;
     for s in sequences.iter() {
