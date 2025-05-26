@@ -2,17 +2,15 @@
 
 use rust_disruptor::consumer::Consumer;
 use rust_disruptor::disruptor::Disruptor;
-use rust_disruptor::event::MyEvent; // Assuming MyEvent is defined in your crate's event module
+use rust_disruptor::event::MyEvent;
 use rust_disruptor::producer::Producer;
-use rust_disruptor::sequencer::{ProducerMode, Sequence}; // Sequence might not be directly used here but good for consistency
+use rust_disruptor::sequencer::ProducerMode;
 use rust_disruptor::wait_strategy::BusySpinWaitStrategy;
 
 use std::sync::{Arc, Mutex};
 use std::thread;
-// use std::time::Duration; // Not strictly needed for this simplified version
 
 // --- Producer Task Function ---
-// Reusable from other basic tests
 fn producer_task_basic(producer: Producer<MyEvent>, id: usize, num_events: u64, start_value: u64) {
     println!("[SPSC_Producer {}] Starting. Will produce {} events starting from value {}.", id, num_events, start_value);
     for i in 0..num_events {
@@ -28,13 +26,11 @@ fn producer_task_basic(producer: Producer<MyEvent>, id: usize, num_events: u64, 
 }
 
 // --- Consumer Task Function ---
-// Reusable from other basic tests, relies on Consumer::process_event accepting FnMut
 fn consumer_task_basic(
     consumer: Consumer<MyEvent, BusySpinWaitStrategy>,
     processed_values_clone: Arc<Mutex<Vec<u64>>>,
     id: usize,
     total_events_to_consume: u64,
-    // expected_to_receive_all: bool, // For SPSC, this is always true
 ) {
     println!("[SPSC_Consumer {}] Starting. Expecting {} events.", id, total_events_to_consume);
     let mut count = 0;

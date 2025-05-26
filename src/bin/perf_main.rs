@@ -1,6 +1,5 @@
 // src/bin/perf_main.rs
 
-// Replace `your_crate_name` with the actual name of your crate from Cargo.toml
 use rust_disruptor::consumer::Consumer;
 use rust_disruptor::disruptor::Disruptor;
 use rust_disruptor::event::MyEvent;
@@ -13,7 +12,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Instant;
 
-// --- Consumer Task Function (Revised for Performance Test - Copied from original main.rs) ---
+// --- Consumer Task Function  ---
 fn consumer_task_perf_test(
     consumer: Consumer<MyEvent, BusySpinWaitStrategy>,
     accumulated_sum_perf: Arc<AtomicU64>,
@@ -37,10 +36,8 @@ fn consumer_task_perf_test(
                 if processed_count_perf >= iterations_to_process {
                     break;
                 }
-                unsafe {
-                    let event_perf = consumer.ring_buffer.get(seq_to_process);
-                    accumulated_sum_perf.fetch_add(event_perf.value, Ordering::Relaxed);
-                }
+                let event_perf = consumer.ring_buffer.get(seq_to_process);
+                accumulated_sum_perf.fetch_add(event_perf.value, Ordering::Relaxed);
                 processed_count_perf += 1;
             }
             consumer.sequence.set(highest_available_by_wait_strategy);

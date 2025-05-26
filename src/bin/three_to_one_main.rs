@@ -8,7 +8,6 @@ use rust_disruptor::producer::Producer;
 use rust_disruptor::sequencer::ProducerMode;
 use rust_disruptor::wait_strategy::{BusySpinWaitStrategy, WaitStrategy};
 
-use std::sync::atomic::{Ordering}; // Removed AtomicU64, AtomicUsize as not directly used here for now
 use std::sync::{mpsc, Arc, Barrier, Mutex};
 use std::thread::{self};
 use std::time::Instant;
@@ -41,7 +40,7 @@ impl ValueAdditionHandler {
             id,
         }
     }
-    fn on_event(&mut self, event: &MyValueEvent, sequence: i64, end_of_batch: bool) {
+    fn on_event(&mut self, event: &MyValueEvent, _sequence: i64, end_of_batch: bool) {
         self.value_sum += event.value;
         self.event_count += 1;
 
@@ -82,9 +81,6 @@ fn value_publisher_task(
             event.value = i as i64;
         }
         guard.publish();
-        // if (i + 1) % progress_interval == 0 {
-        //     println!("[Publisher-{}] Published {}/{} events.", publisher_id, i + 1, iterations_per_publisher);
-        // }
     }
     println!("[Publisher-{}] Finished publishing {} events.", publisher_id, iterations_per_publisher);
 }
@@ -103,8 +99,6 @@ fn consumer_task_for_handler(
         handler_id_for_log = h_guard.id;
         expected_total_events_for_handler = h_guard.expected_event_count;
     }
-    // let mut local_event_count_log = 0;
-    // let progress_log_interval = (expected_total_events_for_handler / 20).max(1);
 
     loop {
         let next_sequence_to_try = consumer.sequence.get() + 1;
@@ -122,14 +116,8 @@ fn consumer_task_for_handler(
             }
             for s in next_sequence_to_try..=highest_available {
                 let end_of_batch = s == highest_available;
-                unsafe {
-                    let event = consumer.ring_buffer.get(s);
-                    handler.on_event(event, s, end_of_batch);
-                }
-                // local_event_count_log += 1;
-                // if local_event_count_log % progress_log_interval == 0 {
-                //      println!("[Consumer -> Handler-{}] Locally processed ~{} events. Handler total: {}/{}", handler.id, local_event_count_log, handler.get_event_count(), handler.expected_event_count);
-                // }
+                let event = consumer.ring_buffer.get(s);
+                handler.on_event(event, s, end_of_batch);
                 if handler.get_event_count() >= handler.expected_event_count {
                     break;
                 }
