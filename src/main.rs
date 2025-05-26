@@ -1,12 +1,12 @@
-// src/main.rs (MODIFIED for Multi-Producer Example)
+// src/main.rs
 
-mod event;
-mod sequencer;
-mod ring_buffer;
-mod wait_strategy;
-mod producer;
-mod consumer;
-mod disruptor;
+mod event;         
+mod sequencer;     
+mod ring_buffer;   
+mod wait_strategy; 
+mod producer;      
+mod consumer;      
+mod disruptor;     
 
 use event::MyEvent;
 use wait_strategy::BusySpinWaitStrategy;
@@ -14,108 +14,153 @@ use disruptor::Disruptor;
 use std::thread;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
-use std::collections::HashSet; // To check for unique values
+use std::collections::HashSet;
 
 fn main() {
-    println!("Starting Rust Disruptor multi-producer example...");
+    println!("启动 Rust Disruptor 多生产者多消费者示例...");
 
     const BUFFER_SIZE: usize = 16;
-    let mut disruptor = Disruptor::new(BUFFER_SIZE, BusySpinWaitStrategy);
+    // 初始化 Disruptor，指定事件类型和等待策略
+    let mut disruptor = Disruptor::<MyEvent, BusySpinWaitStrategy>::new(BUFFER_SIZE, BusySpinWaitStrategy);
 
-    // Create multiple producers
-    let producer1 = disruptor.create_producer();
+    // 创建多个生产者实例
+    let producer1 = disruptor.create_producer(); 
     let producer2 = disruptor.create_producer();
 
-    // Create a consumer
-    let consumer = disruptor.create_consumer(None);
+    // --- 修正点：创建多个消费者实例 ---
+    let consumer1 = disruptor.create_consumer(None); // 消费者 1，目前没有依赖
+    let consumer2 = disruptor.create_consumer(None); // 消费者 2，目前没有依赖
 
-    // Use Arc<Mutex<Vec<usize>>> to collect processed values in a thread-safe way
-    let processed_values = Arc::new(Mutex::new(Vec::new()));
-    let processed_values_consumer_clone = Arc::clone(&processed_values);
+    // --- 修正点：为每个消费者准备独立的数据收集器 ---
+    let processed_values_c1 = Arc::new(Mutex::new(Vec::<u64>::new())); 
+    let processed_values_c1_clone = Arc::clone(&processed_values_c1);
 
-    // Determine total events to produce
+    let processed_values_c2 = Arc::new(Mutex::new(Vec::<u64>::new())); 
+    let processed_values_c2_clone = Arc::clone(&processed_values_c2);
+
+    // 定义每个生产者将生产的事件数量
     const NUM_EVENTS_PER_PRODUCER: usize = 10;
-    const TOTAL_EVENTS: usize = NUM_EVENTS_PER_PRODUCER * 2; // Two producers
+    const TOTAL_EVENTS: usize = NUM_EVENTS_PER_PRODUCER * 2; // 总事件数 (2 个生产者)
 
-    // Start consumer thread
-    let consumer_handle = thread::spawn(move || {
-        println!("[Consumer] Consumer thread started.");
+    // --- 修正点：启动第一个消费者线程 ---
+    let consumer1_handle = thread::spawn(move || {
+        println!("[消费者 1] 消费者线程启动。");
         let mut count = 0;
 
         loop {
-            let result = consumer.process_event(|event: &MyEvent| {
-                // println!("[Consumer] Processed event: {:?}", event); // Too verbose for many events
-                processed_values_consumer_clone.lock().unwrap().push(event.value);
+            // 消费者处理事件的逻辑，将事件值收集到自己的 Vec 中
+            let result = consumer1.process_event(|event: &MyEvent| {
+                processed_values_c1_clone.lock().unwrap().push(event.value);
             });
 
-            if let Some(_) = result {
+            if let Some(_) = result { // 如果处理了事件
                 count += 1;
-                if count >= TOTAL_EVENTS { // Process all expected events
-                    println!("[Consumer] Processed all {} events. Exiting.", TOTAL_EVENTS);
+                // 当处理的事件数量达到总事件数时，消费者完成任务
+                if count >= TOTAL_EVENTS { 
+                    println!("[消费者 1] 处理了所有 {} 个事件。退出。", TOTAL_EVENTS);
                     break;
                 }
             } else {
-                thread::yield_now();
+                // 没有新事件可用，让出 CPU
+                thread::yield_now(); 
             }
         }
-        println!("[Consumer] Consumer thread finished.");
+        println!("[消费者 1] 消费者线程完成。");
     });
 
-    // Start producer 1 thread
+    // --- 修正点：启动第二个消费者线程 ---
+    let consumer2_handle = thread::spawn(move || {
+        println!("[消费者 2] 消费者线程启动。");
+        let mut count = 0;
+
+        loop {
+            // 消费者处理事件的逻辑
+            let result = consumer2.process_event(|event: &MyEvent| {
+                processed_values_c2_clone.lock().unwrap().push(event.value);
+            });
+
+            if let Some(_) = result { // 如果处理了事件
+                count += 1;
+                if count >= TOTAL_EVENTS { 
+                    println!("[消费者 2] 处理了所有 {} 个事件。退出。", TOTAL_EVENTS);
+                    break;
+                }
+            } else {
+                thread::yield_now(); 
+            }
+        }
+        println!("[消费者 2] 消费者线程完成。");
+    });
+
+    // 启动生产者 1 线程
     let producer1_handle = thread::spawn(move || {
-        println!("[Producer 1] Producer thread started.");
+        println!("[生产者 1] 生产者线程启动。");
         for i in 0..NUM_EVENTS_PER_PRODUCER {
-            let sequence = producer1.next();
-            let event = producer1.get_mut(sequence);
-            event.value = i; // Assign value based on its own producer index
-            // println!("[Producer 1] Publishing event: value={}, sequence={}", i, sequence); // Too verbose
-            producer1.publish(sequence);
-            thread::sleep(Duration::from_millis(50)); // Shorter sleep to see more interleaving
+            let claim_guard = producer1.next(); 
+            let sequence = claim_guard.sequence();
+            
+            unsafe {
+                let event = producer1.get_mut(sequence); 
+                event.value = i as u64; 
+            }
+            claim_guard.publish(); 
+            thread::sleep(Duration::from_millis(50));
         }
-        println!("[Producer 1] Producer thread finished.");
+        println!("[生产者 1] 生产者线程完成。");
     });
 
-    // Start producer 2 thread
+    // 启动生产者 2 线程
     let producer2_handle = thread::spawn(move || {
-        println!("[Producer 2] Producer thread started.");
+        println!("[生产者 2] 生产者线程启动。");
         for i in 0..NUM_EVENTS_PER_PRODUCER {
-            let sequence = producer2.next();
-            let event = producer2.get_mut(sequence);
-            event.value = i + NUM_EVENTS_PER_PRODUCER; // Assign unique values to distinguish producers
-            // println!("[Producer 2] Publishing event: value={}, sequence={}", event.value, sequence); // Too verbose
-            producer2.publish(sequence);
-            thread::sleep(Duration::from_millis(70)); // Different sleep to observe interleaving
+            let claim_guard = producer2.next();
+            let sequence = claim_guard.sequence();
+            
+            unsafe {
+                let event = producer2.get_mut(sequence);
+                event.value = (i + NUM_EVENTS_PER_PRODUCER) as u64; 
+            }
+            claim_guard.publish(); 
+            thread::sleep(Duration::from_millis(70));
         }
-        println!("[Producer 2] Producer thread finished.");
+        println!("[生产者 2] 生产者线程完成。");
     });
 
 
-    // Wait for all threads to finish
-    producer1_handle.join().expect("Producer 1 thread panicked");
-    producer2_handle.join().expect("Producer 2 thread panicked");
-    consumer_handle.join().expect("Consumer thread panicked");
+    // 等待所有线程完成
+    producer1_handle.join().expect("生产者 1 线程 panic");
+    producer2_handle.join().expect("生产者 2 线程 panic");
+    // --- 修正点：等待所有消费者线程完成 ---
+    consumer1_handle.join().expect("消费者 1 线程 panic");
+    consumer2_handle.join().expect("消费者 2 线程 panic");
 
-    let final_values_locked = processed_values.lock().unwrap();
-    let mut final_values: Vec<usize> = final_values_locked.clone();
-    final_values.sort_unstable(); // Sort to make comparison easier, order isn't guaranteed
+    // --- 修正点：合并并验证所有消费者的数据 ---
+    let mut combined_final_values: Vec<u64> = Vec::new();
+    // 从消费者 1 的收集器中获取数据
+    combined_final_values.extend_from_slice(&processed_values_c1.lock().unwrap());
+    // 从消费者 2 的收集器中获取数据
+    combined_final_values.extend_from_slice(&processed_values_c2.lock().unwrap());
+    
+    // 对合并后的数据进行排序（方便观察，顺序不保证）
+    combined_final_values.sort_unstable(); 
 
-    println!("\nAll events processed. Final collected values (sorted): {:?}", final_values);
+    println!("\n所有事件已处理。最终收集到的值 (排序后，可能包含来自多个消费者的重复)：{:?}", combined_final_values);
 
-    // Verify the output: check for uniqueness and correct number of events
-    let mut expected_values_set = HashSet::new();
+    // 验证输出：检查唯一性，并确保所有事件都被处理
+    let mut expected_values_set: HashSet<u64> = HashSet::new();
     for i in 0..NUM_EVENTS_PER_PRODUCER {
-        expected_values_set.insert(i); // From producer 1
-        expected_values_set.insert(i + NUM_EVENTS_PER_PRODUCER); // From producer 2
+        expected_values_set.insert(i as u64); // 来自生产者 1 的事件
+        expected_values_set.insert((i + NUM_EVENTS_PER_PRODUCER) as u64); // 来自生产者 2 的事件
     }
 
-    let mut actual_values_set = HashSet::new();
-    for &val in final_values.iter() {
-        actual_values_set.insert(val);
+    let mut actual_unique_values_set = HashSet::new();
+    for &val in combined_final_values.iter() {
+        actual_unique_values_set.insert(val);
     }
 
-    assert_eq!(actual_values_set.len(), TOTAL_EVENTS, "Incorrect number of unique events processed.");
-    assert_eq!(actual_values_set, expected_values_set, "Processed values do not match expected set of values.");
-    println!("Assertion passed: Processed values match expected values and are unique.");
+    assert_eq!(actual_unique_values_set.len(), TOTAL_EVENTS, "处理的唯一事件数量不正确。");
+    assert_eq!(actual_unique_values_set, expected_values_set, "处理的值集合与期望值集合不匹配。");
+    println!("断言通过：处理的值与期望值匹配且是唯一的。");
 
-    println!("Rust Disruptor multi-producer example finished.");
+    println!("Rust Disruptor 多生产者多消费者示例完成。");
 }

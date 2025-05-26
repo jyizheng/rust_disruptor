@@ -4,6 +4,12 @@ use std::sync::atomic::{AtomicI64, AtomicI8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::hint; // For spin_loop_hint
 
+// Sequencer needs RingBuffer to define its capacity and index_mask
+// It doesn't directly access entries, but these types are relevant to its operation
+use crate::ring_buffer::RingBuffer;
+// The Event trait is needed for consistency if types related to events are discussed
+use crate::event::Event;
+
 // Re-defining Sequence as it was, but adding some helpful methods for claiming
 #[derive(Debug)]
 pub struct Sequence(AtomicI64);
@@ -74,20 +80,24 @@ impl Sequencer {
     ///
     /// # Returns
     /// The sequence number that the producer can now write to.
-    pub fn next(&self) -> i64 {
+    pub fn next(self: &Arc<Self>) -> ClaimedSequenceGuard {
         self.next_batch(1) // Claim a single slot
     }
 
 
     /// 为生产者声明一批 `delta` 序列号。
     /// 这是核心的多生产者声明逻辑。
-    pub fn next_batch(&self, delta: i64) -> i64 {
+    ///
+    /// # 返回值
+    /// 一个 `ClaimedSequenceGuard`，它封装了声明的序列号，
+    /// 并且在被丢弃时（如果未发布）会发出警告。
+    pub fn next_batch(self: &Arc<Self>, delta: i64) -> ClaimedSequenceGuard {
         if delta <= 0 || delta > self.buffer_size {
             panic!("Delta must be greater than 0 and less than or equal to buffer size.");
         }
 
         let mut current_claimed;
-        let mut claimed_sequence_end; // The end sequence of the batch claimed by *this* producer
+        let mut claimed_sequence_end; // 本批次声明的结束序列号
 
         loop {
             current_claimed = self.highest_claimed_sequence.get(); // 获取当前最高已声明序列号
@@ -124,17 +134,14 @@ impl Sequencer {
             }
         }
         
-        // 返回当前生产者声明的批次结束序列号
-        claimed_sequence_end
+        // 返回一个 ClaimedSequenceGuard 实例
+        ClaimedSequenceGuard::new(claimed_sequence_end, Arc::clone(self))
     }
 
 
-
-    /// 发布一个序列号，使其事件对消费者可见。
-    ///
-    /// 对于多生产者，`publish` 调用确保事件按其序列号顺序发布，
-    /// 即使生产者声明它们的顺序可能不同。
-    pub fn publish(&self, sequence: i64) {
+    /// 内部方法：标记一个序列号为已发布，使其事件对消费者可见。
+    /// 此方法由 `ClaimedSequenceGuard` 调用。
+    fn mark_sequence_as_published(self: &Arc<Self>, sequence: i64) {
         // 1. 将当前序列号对应的槽位标记为已发布。
         let index = (sequence & self.index_mask) as usize; // 使用 index_mask 进行快速取模
         self.available_buffer[index].store(1, Ordering::Release); // 设置为1表示已发布
@@ -193,12 +200,14 @@ impl Sequencer {
     }
 
 
-
-    /// Gets the lowest sequence number among all gating sequences.
+    /// 获取所有 `gating_sequences` 中最低的序列号。
+    /// 这代表了最慢的消费者已处理到的位置，用于生产者的反压检查。
     pub fn get_minimum_gating_sequence(&self) -> i64 {
         let gating_sequences_guard = self.gating_sequences.lock().unwrap();
         if gating_sequences_guard.is_empty() {
-            return self.cursor.get();
+            // 如果没有消费者，则最小的门控序列是当前最高已发布序列，
+            // 这样生产者就不会被消费者阻塞。
+            return self.cursor.get(); 
         }
 
         let mut min_sequence = i64::MAX;
@@ -206,5 +215,63 @@ impl Sequencer {
             min_sequence = min_sequence.min(gating_sequence.get());
         }
         min_sequence
+    }
+
+
+}
+
+
+
+// --- 声明守卫 (ClaimedSequenceGuard) ---
+// 此结构体确保已声明的序列号要么被显式发布，
+// 要么在未发布的情况下被丢弃时发出警告/恐慌。
+pub struct ClaimedSequenceGuard {
+    sequence: i64,
+    // 我们使用 AtomicI64 (作为布尔值) 来跟踪 `publish()` 是否已被调用。
+    // 0: 未发布, 1: 已发布。
+    published_flag: AtomicI64, 
+    // 我们需要 `Arc` 到 `Sequencer` 以便在守卫被发布时调用其 `mark_sequence_as_published` 方法。
+    sequencer: Arc<Sequencer>,
+}
+    
+impl ClaimedSequenceGuard {
+    fn new(sequence: i64, sequencer: Arc<Sequencer>) -> Self {
+        ClaimedSequenceGuard {
+            sequence,
+            published_flag: AtomicI64::new(0), // 初始状态为未发布
+            sequencer,
+        }
+    }
+    
+    /// 返回此守卫声明的序列号。
+    pub fn sequence(&self) -> i64 {
+        self.sequence
+    }
+    
+    /// 显式发布已声明的序列号。
+    /// 这会消耗守卫，从而防止 `drop` 被调用。
+    pub fn publish(self) {
+        // 将发布标志设置为 true。
+        self.published_flag.store(1, Ordering::Release);
+        // 通知序列协调器此序列号已发布。
+        self.sequencer.mark_sequence_as_published(self.sequence);
+        // `self` 在这里被消耗，因此 `drop` 不会被再次调用。
+    }
+}
+
+// --- ClaimedSequenceGuard 的 Drop Trait 实现 ---
+impl Drop for ClaimedSequenceGuard {
+    fn drop(&mut self) {
+        // 如果 `published_flag` 仍为 0，则表示 `publish()` 未被调用。
+        if self.published_flag.load(Ordering::Acquire) == 0 {
+            eprintln!(
+                "CRITICAL ERROR: Claimed sequence {} was not published. Consumers will stall!",
+                self.sequence
+            );
+            // 在实际应用场景中，您可能会在这里触发 `panic!` 以立即
+            // 使应用程序崩溃并防止进一步的问题，或者记录到
+            // 一个健壮的错误监控系统。
+            // panic!("Producer failed to publish claimed sequence {}", self.sequence);
+        }
     }
 }

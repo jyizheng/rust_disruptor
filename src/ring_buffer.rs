@@ -1,7 +1,5 @@
-use crate::event::Event;
+use crate::event::{Event, MyEvent};
 use std::cell::UnsafeCell; // New import!
-use std::sync::atomic::{AtomicI64, Ordering}; // Still needed for other parts
-use std::sync::Arc; // Still needed for other parts
 
 pub struct RingBuffer<T: Event> {
     // Wrap entries in UnsafeCell to allow mutable access through &self reference
