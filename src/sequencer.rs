@@ -109,8 +109,8 @@ impl Sequencer {
 
     fn mark_sequence_as_published(self: &Arc<Self>, sequence: i64) {
         let index = (sequence & self.index_mask) as usize;
-        let flag_value = sequence >> self.index_shift; 
-        self.available_buffer[index].store(flag_value, Ordering::Release);
+        //let flag_value = sequence >> self.index_shift; 
+        self.available_buffer[index].store(sequence, Ordering::Release);
 
         self.wait_strategy.signal_all(); // <-- 确保此调用存在
     }
@@ -134,9 +134,10 @@ impl Sequencer {
 
         while available_sequence <= highest_claimed_sequence {
             let index = (available_sequence & self.index_mask) as usize;
-            let expected_flag = available_sequence >> self.index_shift; 
-
-            if self.available_buffer[index].load(Ordering::Acquire) == expected_flag {
+            //let expected_flag = available_sequence >> self.index_shift; 
+            let stored_sequence = self.available_buffer[index].load(Ordering::Acquire);
+            //if self.available_buffer[index].load(Ordering::Acquire) == expected_flag {
+            if stored_sequence >= available_sequence {
                 available_sequence += 1; 
             } else {
                 return available_sequence - 1; 
