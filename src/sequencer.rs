@@ -18,15 +18,23 @@ impl Sequence {
     }
 
     #[inline(always)]
+    /// Retrieves the current value of the atomic variable.
+    /// Uses `Ordering::Acquire` to ensure that subsequent operations
+    /// see all memory writes that happened before this load.
     pub fn get(&self) -> i64 {
         self.0.load(Ordering::Acquire)
     }
 
     #[inline(always)]
+    /// Sets the value of the atomic variable.
+    /// Uses `Ordering::Release` to ensure that all previous memory writes
+    /// are visible to other threads before this store.
     pub fn set(&self, value: i64) {
         self.0.store(value, Ordering::Release);
     }
 
+    /// Atomically adds the given delta to the current value and returns the previous value.
+    /// Uses `Ordering::SeqCst` to ensure a globally consistent order of operations.
     pub fn fetch_add(&self, delta: i64) -> i64 {
         self.0.fetch_add(delta, Ordering::SeqCst) // fetch_add returns previous value
     }
