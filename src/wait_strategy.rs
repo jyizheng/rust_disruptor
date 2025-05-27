@@ -57,28 +57,6 @@ impl WaitStrategy for BusySpinWaitStrategy {
         }
     }
 
-
-    /*fn wait_for_bak(
-        &self,
-        sequence: i64,
-        sequencer: Arc<Sequencer>, 
-        gating_sequences: &[Arc<Sequence>], 
-        _consumer_sequence: Arc<Sequence>, 
-    ) -> i64 {
-        loop {
-            let min_gating_sequence = get_minimum_sequence(gating_sequences);
-
-            if min_gating_sequence >= sequence {
-                // 现在调用 sequencer.get_highest_available_sequence
-                let available_from_sequencer = sequencer.get_highest_available_sequence(sequence - 1);
-                if available_from_sequencer >= sequence {
-                    return available_from_sequencer; 
-                }
-            }
-            hint::spin_loop();
-        }
-    }*/
-
     fn signal_all(&self) { }
 
     fn clone_box(&self) -> Box<dyn WaitStrategy> {
@@ -105,7 +83,7 @@ impl WaitStrategy for BlockingWaitStrategy {
     fn wait_for(
         &self,
         sequence: i64,
-        sequencer: Arc<Sequencer>, // <-- 核心修正点：确保此参数存在
+        sequencer: Arc<Sequencer>,
         gating_sequences: &[Arc<Sequence>], 
         _consumer_sequence: Arc<Sequence>,
     ) -> i64 {
@@ -148,7 +126,7 @@ impl WaitStrategy for YieldingWaitStrategy {
     fn wait_for(
         &self,
         sequence: i64,
-        sequencer: Arc<Sequencer>, // <-- 核心修正点：确保此参数存在
+        sequencer: Arc<Sequencer>,
         gating_sequences: &[Arc<Sequence>], 
         _consumer_sequence: Arc<Sequence>,
     ) -> i64 {
@@ -199,7 +177,7 @@ impl WaitStrategy for PhasedBackoffWaitStrategy {
     fn wait_for(
         &self,
         sequence: i64,
-        sequencer: Arc<Sequencer>, // <-- 核心修正点：确保此参数存在
+        sequencer: Arc<Sequencer>,
         gating_sequences: &[Arc<Sequence>], 
         consumer_sequence: Arc<Sequence>, 
     ) -> i64 {
@@ -249,7 +227,7 @@ impl WaitStrategy for PhasedBackoffWaitStrategy {
 }
 
 
-// --- 辅助函数：获取序列切片中的最小值 ---
+// --- Helper function: get the minimum value in a sequence slice ---
 fn get_minimum_sequence(sequences: &[Arc<Sequence>]) -> i64 {
     let mut min_sequence = i64::MAX;
     for s in sequences.iter() {

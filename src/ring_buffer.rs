@@ -1,5 +1,5 @@
 use crate::event::{Event};
-use std::cell::UnsafeCell; // New import!
+use std::cell::UnsafeCell;
 
 pub struct RingBuffer<T: Event> {
     // Wrap entries in UnsafeCell to allow mutable access through &self reference

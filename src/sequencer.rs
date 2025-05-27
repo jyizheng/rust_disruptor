@@ -9,7 +9,7 @@ use crate::wait_strategy::WaitStrategy;
 
 // --- Sequence Struct ---
 #[derive(Debug)]
-#[repr(align(64))] // <-- Add cache line alignment
+#[repr(align(64))]
 pub struct Sequence(AtomicI64);
 
 impl Sequence {
@@ -69,9 +69,9 @@ pub struct Sequencer {
     pub buffer_size: i64,
     index_mask: i64,
     index_shift: i64,
-    available_buffer: Vec<PaddedAtomicI64>, // <-- MODIFIED: Use PaddedAtomicI64
+    available_buffer: Vec<PaddedAtomicI64>,
     wait_strategy: Arc<dyn WaitStrategy>,
-    producer_mode: ProducerMode, // <-- New field
+    producer_mode: ProducerMode,
     // --- New field for SPSC fast path ---
     single_consumer_gate_cache: RwLock<Option<Arc<Sequence>>>,
 }
@@ -96,10 +96,10 @@ impl Sequencer {
             buffer_size: capacity_i64,
             index_mask: (capacity_i64 - 1),
             index_shift,
-            available_buffer: available_buffer_init, // <-- MODIFIED
+            available_buffer: available_buffer_init,
             wait_strategy,
-            producer_mode, // <-- Store it
-            single_consumer_gate_cache: RwLock::new(None), // Initialize new cache
+            producer_mode,
+            single_consumer_gate_cache: RwLock::new(None),
         }
     }
 
@@ -196,7 +196,7 @@ impl Sequencer {
     fn mark_sequence_as_published(self: &Arc<Self>, sequence: i64) {
         let index = (sequence & self.index_mask) as usize;
         let flag_value = sequence >> self.index_shift;
-        self.available_buffer[index].store(flag_value, Ordering::Release); // <-- MODIFIED: Uses PaddedAtomicI64's store
+        self.available_buffer[index].store(flag_value, Ordering::Release);
 
         self.wait_strategy.signal_all();
     }

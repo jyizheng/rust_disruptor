@@ -12,7 +12,7 @@ pub struct Consumer<T: Event, W: WaitStrategy> {
     pub sequencer: Arc<Sequencer>,
     pub ring_buffer: Arc<RingBuffer<T>>,
     pub wait_strategy: Arc<W>, 
-    pub gating_sequences_for_wait: Vec<Arc<Sequence>>, // 包含所有门控条件 (生产者光标 + 依赖)
+    pub gating_sequences_for_wait: Vec<Arc<Sequence>>, // Contains all gating conditions (producer cursor + dependencies)
 }
 
 impl<T: Event, W: WaitStrategy> Consumer<T, W> {
@@ -46,10 +46,9 @@ impl<T: Event, W: WaitStrategy> Consumer<T, W> {
     {
         let next_sequence_to_consume = self.sequence.get() + 1; 
 
-        // --- 修正点：将 Arc::clone(&self.sequencer) 作为第二个参数传递 ---
         let available_sequence = self.wait_strategy.wait_for(
             next_sequence_to_consume,
-            Arc::clone(&self.sequencer), // <-- 新增此参数
+            Arc::clone(&self.sequencer),
             &self.gating_sequences_for_wait, 
             Arc::clone(&self.sequence), 
         );
