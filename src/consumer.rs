@@ -67,4 +67,45 @@ impl<T: Event, W: WaitStrategy> Consumer<T, W> {
             None 
         }
     }
+
+    /// Processes a batch of available events from the RingBuffer.
+    ///
+    /// The `event_handler` is called for each event in the batch.
+    /// It receives the event, its sequence number, and a flag indicating if it's the last event in the current batch.
+    ///
+    /// Returns the number of events processed, or 0 if no events were immediately available.
+    pub fn process_event_batch<F>(&self, mut event_handler: F) -> u64
+    where
+        F: FnMut(&T, i64, bool),
+    {
+        let next_sequence_to_consume = self.sequence.get() + 1;
+
+        // Wait for the highest sequence available for consumption.
+        // This call blocks or spins according to the wait strategy until at least `next_sequence_to_consume` is available.
+        let highest_available_sequence = self.wait_strategy.wait_for(
+            next_sequence_to_consume,
+            Arc::clone(&self.sequencer),
+            &self.gating_sequences_for_wait,
+            Arc::clone(&self.sequence),
+        );
+
+        if highest_available_sequence >= next_sequence_to_consume {
+            let mut processed_count = 0;
+            for current_sequence in next_sequence_to_consume..=highest_available_sequence {
+                let end_of_batch = current_sequence == highest_available_sequence;
+                unsafe {
+                    // Safety: The wait_strategy ensures that sequences up to `highest_available_sequence`
+                    // have been published and are safe to read.
+                    let event = self.ring_buffer.get(current_sequence); //
+                    event_handler(event, current_sequence, end_of_batch);
+                }
+                processed_count += 1;
+            }
+            self.sequence.set(highest_available_sequence); // Update consumer's sequence to the last processed event.
+            processed_count
+        } else {
+            0 // No events were processed.
+        }
+    }
+
 }
