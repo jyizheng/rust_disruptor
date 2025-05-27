@@ -1,6 +1,5 @@
 // src/bin/three_to_one_main.rs
 
-// Replace `your_crate_name` with your actual crate name.
 use rust_disruptor::consumer::Consumer;
 use rust_disruptor::disruptor::Disruptor;
 use rust_disruptor::event::Event as MyEventTrait;
@@ -44,18 +43,13 @@ impl ValueAdditionHandler {
         self.value_sum += event.value;
         self.event_count += 1;
 
-        // Optional: progress logging (can be very verbose)
-        // if self.event_count % (self.expected_event_count / 100).max(1) == 0 {
-        //     println!("[Handler-{}] Processed event {}, current count: {}/{}", self.id, sequence, self.event_count, self.expected_event_count);
-        // }
-
         if end_of_batch {
             self.batch_count += 1;
         }
 
         if self.event_count >= self.expected_event_count {
             if self.latch_sender.try_send(()).is_ok() {
-                // println!("[Handler-{}] Sent completion signal. Processed {} events.", self.id, self.event_count);
+                println!("[Handler-{}] Sent completion signal. Processed {} events.", self.id, self.event_count);
             }
         }
     }

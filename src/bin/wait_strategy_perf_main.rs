@@ -138,10 +138,8 @@ fn run_spsc_throughput_test<W: WaitStrategy + Clone + Send + Sync + Default + 's
     let end_time = Instant::now();
     // println!("[Test-{}] Consumer signaled completion.", strategy_name);
 
-
     consumer_thread.join().expect("Consumer thread panicked");
     // println!("[Test-{}] Consumer thread joined.", strategy_name);
-
 
     let elapsed_duration = end_time.duration_since(start_time);
     let elapsed_ms = elapsed_duration.as_millis();
