@@ -1,4 +1,5 @@
 // src/lib.rs
+
 pub mod consumer;
 pub mod disruptor;
 pub mod event;

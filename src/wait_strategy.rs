@@ -1,7 +1,7 @@
 // src/wait_strategy.rs
 
 use crate::sequencer::Sequence;
-use crate::sequencer::Sequencer; // <-- 确保引入 Sequencer
+use crate::sequencer::Sequencer;
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
 use std::hint;
