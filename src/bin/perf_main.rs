@@ -19,7 +19,7 @@ fn consumer_task_perf_test(
     iterations_to_process: u64,
     tx_perf: mpsc::Sender<()>,
 ) {
-    println!("[性能测试消费者] 消费者线程启动。");
+    println!("[Performance Test Consumer] Consumer thread started.");
     let mut processed_count_perf = 0;
 
     while processed_count_perf < iterations_to_process {
@@ -47,15 +47,15 @@ fn consumer_task_perf_test(
         }
     }
 
-    println!("[性能测试消费者] 处理了所有 {} 个事件。退出。", iterations_to_process);
+    println!("[Performance Test Consumer] Processed all {} events. Exiting.", iterations_to_process);
     if tx_perf.send(()).is_err() {
-        eprintln!("[性能测试消费者] 无法发送完成信号。接收端可能已关闭。");
+        eprintln!("[Performance Test Consumer] Could not send completion signal. Receiver may have been dropped.");
     }
-    println!("[性能测试消费者] 消费者线程完成。");
+    println!("[Performance Test Consumer] Consumer thread finished.");
 }
 
 fn main() {
-    println!("\n--- 运行一对一有序吞吐量测试 (单独二进制) ---");
+    println!("\n--- Running one-to-one ordered throughput test (separate binary) ---");
 
     const BUFFER_SIZE_PERF: usize = 65536;
     const ITERATIONS_PERF: u64 = 100_000_000;
@@ -84,7 +84,7 @@ fn main() {
         );
     });
 
-    println!("[性能测试生产者] 生产者线程启动。");
+    println!("[Performance Test Producer] Producer thread started.");
     let start_time_perf = Instant::now();
 
     for i in 0..ITERATIONS_PERF {
@@ -96,31 +96,31 @@ fn main() {
         }
         claim_guard_perf.publish();
     }
-    println!("[性能测试生产者] 生产者线程完成。");
+    println!("[Performance Test Producer] Producer thread finished.");
 
     rx_perf.recv().expect("Failed to receive completion signal from consumer");
     let end_time_perf = Instant::now();
 
     let elapsed_ms = end_time_perf.duration_since(start_time_perf).as_millis() as u64;
 
-    println!("\n--- 性能测试结果 ---");
-    println!("总迭代次数 (ITERATIONS): {}", ITERATIONS_PERF);
-    println!("缓冲区大小 (BUFFER_SIZE): {}", BUFFER_SIZE_PERF);
-    println!("耗时: {} ms", elapsed_ms);
+    println!("\n--- Performance Test Results ---");
+    println!("Total Iterations (ITERATIONS): {}", ITERATIONS_PERF);
+    println!("Buffer Size (BUFFER_SIZE): {}", BUFFER_SIZE_PERF);
+    println!("Elapsed Time: {} ms", elapsed_ms);
 
     if elapsed_ms > 0 {
         let ops_per_second = (ITERATIONS_PERF * 1000) / elapsed_ms;
-        println!("吞吐量: {} ops/sec", ops_per_second);
+        println!("Throughput: {} ops/sec", ops_per_second);
     } else {
-        println!("吞吐量: N/A (耗时为0或过短)");
+        println!("Throughput: N/A (elapsed time is 0 or too short)");
     }
 
     let final_sum = accumulated_sum_perf.load(Ordering::SeqCst);
-    println!("最终累加和: {}", final_sum);
-    println!("期望累加和: {}", expected_sum_perf);
+    println!("Final Sum: {}", final_sum);
+    println!("Expected Sum: {}", expected_sum_perf);
 
-    assert_eq!(final_sum, expected_sum_perf, "累加结果不匹配！");
-    println!("断言通过：累加结果正确。");
+    assert_eq!(final_sum, expected_sum_perf, "Sum mismatch!");
+    println!("Assertion passed: Sum is correct.");
 
-    consumer_handle_perf.join().expect("消费者线程 panic");
+    consumer_handle_perf.join().expect("Consumer thread panicked");
 }
