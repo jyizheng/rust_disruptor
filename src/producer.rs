@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::marker::PhantomData;
 
-use crate::event::{Event}; 
+use crate::event::Event; 
 use crate::ring_buffer::RingBuffer; 
 use crate::sequencer::{Sequencer, ClaimedSequenceGuard}; 
 

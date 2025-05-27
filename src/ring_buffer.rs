@@ -1,9 +1,11 @@
-use crate::event::{Event};
+// src/ring_buffer.rs
+
+use crate::event::Event;
 use std::cell::UnsafeCell;
 
 pub struct RingBuffer<T: Event> {
     // Wrap entries in UnsafeCell to allow mutable access through &self reference
-    entries: Box<[UnsafeCell<T>]>, // Changed from Vec<T> to Box<[UnsafeCell<T>]>
+    entries: Box<[UnsafeCell<T>]>,
     capacity: i64,
     index_mask: i64,
 }
@@ -66,5 +68,7 @@ impl<T: Event> RingBuffer<T> {
     }
 }
 
+// Manually implementing Sync for RingBuffer<T> to allow shared references (&RingBuffer<T>) 
+// to be safely accessed across multiple threads. This is marked as unsafe because the 
+// developer must ensure that the internal implementation of RingBuffer<T> is thread-safe.
 unsafe impl<T: Event> Sync for RingBuffer<T> {}
-
