@@ -14,10 +14,10 @@ use std::time::Duration;
 
 // --- Producer Task Function (Copied from original main.rs) ---
 fn producer_task(producer: Producer<MyEvent>, id: usize, fail_on_sequence: Option<u64>) {
-    println!("[生产者 {}] 生产者线程启动。", id);
+    println!("[Producer {}] Producer thread started.", id);
     for i in 0..10 {
         let current_claimed_seq_before_next = producer.sequencer.producer_cursor.get();
-        println!("[生产者 {}] 尝试声明序列号 {}", id, current_claimed_seq_before_next + 1);
+        println!("[Producer {}] Attempting to claim sequence number {}", id, current_claimed_seq_before_next + 1);
 
         let claim_guard = producer.next();
         let sequence = claim_guard.sequence();
@@ -29,7 +29,7 @@ fn producer_task(producer: Producer<MyEvent>, id: usize, fail_on_sequence: Optio
 
         if let Some(fail_seq) = fail_on_sequence {
             if sequence == fail_seq as i64 {
-                println!("[生产者 {}] 模拟失败：不发布序列号 {}", id, sequence);
+                println!("[Producer {}] Simulating failure: not publishing sequence number {}", id, sequence);
                 thread::sleep(Duration::from_millis(100));
                 continue;
             }
@@ -38,7 +38,7 @@ fn producer_task(producer: Producer<MyEvent>, id: usize, fail_on_sequence: Optio
         claim_guard.publish();
         thread::sleep(Duration::from_millis(50));
     }
-    println!("[生产者 {}] 生产者线程完成。", id);
+    println!("[Producer {}] Producer thread finished.", id);
 }
 
 // --- Consumer Task Function (Copied from original main.rs) ---
@@ -48,29 +48,29 @@ fn consumer_task(
     id: usize,
     total_events_to_consume: u64,
 ) {
-    println!("[消费者 {}] 消费者线程启动。", id);
+    println!("[Consumer {}] Consumer thread started.", id);
     let mut count = 0;
     loop {
         let result = consumer.process_event(|event: &MyEvent| {
-            println!("[消费者 {}] 处理事件: {:?}", id, event);
+            println!("[Consumer {}] Processing event: {:?}", id, event);
             processed_values_clone.lock().unwrap().push(event.value);
         });
 
         if let Some(_) = result {
             count += 1;
             if count >= total_events_to_consume {
-                println!("[消费者 {}] 处理了所有 {} 个事件。退出。", id, total_events_to_consume);
+                println!("[Consumer {}] Processed all {} events. Exiting.", id, total_events_to_consume);
                 break;
             }
         } else {
             thread::yield_now();
         }
     }
-    println!("[消费者 {}] 消费者线程完成。", id);
+    println!("[Consumer {}] Consumer thread finished.", id);
 }
 
 fn main() {
-    println!("\n--- 运行基础多生产者多消费者示例 (单独二进制) ---");
+    println!("\n--- Running basic multi-producer multi-consumer example (separate binary) ---");
 
     const BUFFER_SIZE_BASIC: usize = 16;
     let mut disruptor_basic = Disruptor::<MyEvent, BusySpinWaitStrategy>::new(
@@ -122,11 +122,11 @@ fn main() {
         producer_task(producer2_basic, 2, None);
     });
 
-    producer1_handle_basic.join().expect("生产者 1 线程 panic");
-    producer2_handle_basic.join().expect("生产者 2 线程 panic");
-    consumer1_handle_basic.join().expect("消费者 1 线程 panic");
-    consumer2_handle_basic.join().expect("消费者 2 线程 panic");
-    consumer3_handle_basic.join().expect("消费者 3 线程 panic");
+    producer1_handle_basic.join().expect("Producer 1 thread panicked");
+    producer2_handle_basic.join().expect("Producer 2 thread panicked");
+    consumer1_handle_basic.join().expect("Consumer 1 thread panicked");
+    consumer2_handle_basic.join().expect("Consumer 2 thread panicked");
+    consumer3_handle_basic.join().expect("Consumer 3 thread panicked");
 
     let mut combined_final_values_basic: Vec<u64> = Vec::new();
     combined_final_values_basic.extend_from_slice(&processed_values_c1_basic.lock().unwrap());
@@ -135,7 +135,7 @@ fn main() {
 
     combined_final_values_basic.sort_unstable();
 
-    println!("\n所有事件已处理。最终收集到的值 (排序后，可能包含来自多个消费者的重复)：{:?}", combined_final_values_basic);
+    println!("\nAll events processed. Final collected values (sorted, may contain duplicates from multiple consumers): {:?}", combined_final_values_basic);
 
     let mut expected_values_set_basic: HashSet<u64> = HashSet::new();
     for i in 0..NUM_EVENTS_PER_PRODUCER_BASIC {
@@ -148,10 +148,9 @@ fn main() {
         actual_unique_values_set_basic.insert(val);
     }
 
-    assert_eq!(actual_unique_values_set_basic.len(), TOTAL_EVENTS_BASIC, "处理的唯一事件数量不正确。");
-    assert_eq!(actual_unique_values_set_basic, expected_values_set_basic, "处理的值集合与期望值集合不匹配。");
-    println!("断言通过：处理的值与期望值匹配且是唯一的。");
+    assert_eq!(actual_unique_values_set_basic.len(), TOTAL_EVENTS_BASIC, "Number of unique events processed is incorrect.");
+    assert_eq!(actual_unique_values_set_basic, expected_values_set_basic, "Set of processed values does not match expected set.");
+    println!("Assertion passed: Processed values match expected values and are unique.");
 
-    println!("Rust Disruptor 基础多生产者多消费者示例完成。");
+    println!("Rust Disruptor basic multi-producer multi-consumer example finished.");
 }
-
