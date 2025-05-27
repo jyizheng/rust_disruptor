@@ -116,8 +116,10 @@ fn consumer_task_for_handler(
             }
             for s in next_sequence_to_try..=highest_available {
                 let end_of_batch = s == highest_available;
-                let event = consumer.ring_buffer.get(s);
-                handler.on_event(event, s, end_of_batch);
+                unsafe {
+                    let event = consumer.ring_buffer.get(s);
+                    handler.on_event(event, s, end_of_batch);
+                }
                 if handler.get_event_count() >= handler.expected_event_count {
                     break;
                 }

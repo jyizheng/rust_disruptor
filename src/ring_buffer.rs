@@ -31,27 +31,34 @@ impl<T: Event> RingBuffer<T> {
     /// Gets a mutable reference to an event at a given sequence number.
     ///
     /// # Safety
-    /// This method is `unsafe` because it provides a mutable reference
-    /// to data within an `UnsafeCell`. The caller must guarantee that
-    /// no other thread is concurrently writing to or reading from this
-    /// specific slot. In the Disruptor model, the `Sequencer` provides
-    /// this guarantee by ensuring only one producer claims a slot,
-    /// and consumers only read after an event is published.
-    pub fn get_mut(&self, sequence: i64) -> &mut T { // Changed from &mut self to &self
+    /// The caller must ensure that no other thread is concurrently writing to or reading
+    /// from this specific slot, and that this slot has been properly claimed for writing
+    /// via the Sequencer. This typically means the sequence number was obtained from a
+    /// ClaimedSequenceGuard.
+    #[allow(clippy::mut_from_ref)] // Allow lint for this specific, intended pattern
+    pub unsafe fn get_mut(&self, sequence: i64) -> &mut T {
         let index = (sequence & self.index_mask) as usize;
-        unsafe {
-            // Dereference the UnsafeCell to get a mutable pointer, then convert to &mut T
-            &mut *self.entries[index].get()
-        }
+        // Safety: This is unsafe because we're bypassing Rust's borrow checker.
+        // The UnsafeCell allows us to get a raw pointer, which we then dereference
+        // to a mutable reference. The caller (Producer) ensures this is safe
+        // by having exclusive claim to this sequence slot via the Sequencer.
+        &mut *self.entries[index].get()
     }
 
     /// Gets an immutable reference to an event at a given sequence number.
-    pub fn get(&self, sequence: i64) -> &T {
+    /// # Safety
+    /// The caller must ensure that the sequence slot being read has been published
+    /// and is not concurrently being written to by a producer *before* it's published.
+    /// Once published, it should be safe for multiple consumers to read if no producer
+    /// is wrapping around to write to this slot again.
+    #[allow(clippy::mut_from_ref)] // Also allow here if get() also uses UnsafeCell similarly
+                                   // (though get returning &T from &self is usually fine even with UnsafeCell if done right)
+                                   // Or, more precisely for get(), it's not `mut_from_ref` but just needs safety docs if unsafe.
+                                   // If get() is safe, it doesn't need this allow.
+                                   // Assuming your get() also uses `&*self.entries[index].get()`:
+    pub unsafe fn get(&self, sequence: i64) -> &T {
         let index = (sequence & self.index_mask) as usize;
-        unsafe {
-            // Dereference the UnsafeCell to get an immutable pointer, then convert to &T
-            &*self.entries[index].get()
-        }
+        &*self.entries[index].get()
     }
 
     pub fn capacity(&self) -> i64 {

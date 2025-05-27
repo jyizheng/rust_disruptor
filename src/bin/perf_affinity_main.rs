@@ -45,8 +45,10 @@ fn consumer_task_perf_test(
                 if processed_count_perf >= iterations_to_process {
                     break;
                 }
-                let event_perf = consumer.ring_buffer.get(seq_to_process);
-                local_sum += event_perf.value;
+                unsafe {
+                    let event_perf = consumer.ring_buffer.get(seq_to_process);
+                    local_sum += event_perf.value;
+                }
                 processed_count_perf += 1;
             }
             consumer.sequence.set(highest_available_by_wait_strategy);

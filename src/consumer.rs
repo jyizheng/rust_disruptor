@@ -55,8 +55,12 @@ impl<T: Event, W: WaitStrategy> Consumer<T, W> {
         );
 
         if next_sequence_to_consume <= available_sequence {
-            let event = self.ring_buffer.get(next_sequence_to_consume);
-            event_handler(event); 
+            // Add unsafe block here because RingBuffer::get() is an unsafe function
+            // and the Consumer upholds the safety contract for this call.
+            unsafe {
+                let event = self.ring_buffer.get(next_sequence_to_consume);
+                event_handler(event);
+            }
             
             self.sequence.set(next_sequence_to_consume);
             Some(next_sequence_to_consume)

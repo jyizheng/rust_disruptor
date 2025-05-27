@@ -66,8 +66,11 @@ fn spsc_consumer_task<W: WaitStrategy + Send + Sync + 'static>(
                 if processed_count >= iterations_to_process {
                     break;
                 }
-                let event = consumer.ring_buffer.get(seq_to_process);
-                current_sum += event.value; // Add to local sum
+                // Add unsafe block because RingBuffer::get() is unsafe
+                unsafe {
+                    let event = consumer.ring_buffer.get(seq_to_process);
+                    current_sum += event.value; // Add to local sum
+                }
                 processed_count += 1;
             }
             consumer.sequence.set(highest_available);

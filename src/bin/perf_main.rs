@@ -36,8 +36,11 @@ fn consumer_task_perf_test(
                 if processed_count_perf >= iterations_to_process {
                     break;
                 }
-                let event_perf = consumer.ring_buffer.get(seq_to_process);
-                accumulated_sum_perf.fetch_add(event_perf.value, Ordering::Relaxed);
+                // Add unsafe block because RingBuffer::get() is unsafe
+                unsafe {
+                    let event_perf = consumer.ring_buffer.get(seq_to_process);
+                    accumulated_sum_perf.fetch_add(event_perf.value, Ordering::Relaxed);
+                }
                 processed_count_perf += 1;
             }
             consumer.sequence.set(highest_available_by_wait_strategy);
