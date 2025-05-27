@@ -42,8 +42,8 @@ impl<T: Event> Producer<T> {
     /// when used correctly. Misusing this function by providing an arbitrary sequence number can lead
     /// to data races or undefined behavior.
     #[allow(clippy::mut_from_ref)] // Allow lint here as well, as it delegates
-    pub unsafe fn get_mut(&self, sequence: i64) -> &mut T {
+    pub unsafe fn get_mut(&self, sequence: i64) -> &mut T { unsafe {
         self.ring_buffer.get_mut(sequence) // Calls the unsafe RingBuffer::get_mut
-    }
+    }}
 }
 

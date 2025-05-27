@@ -36,14 +36,14 @@ impl<T: Event> RingBuffer<T> {
     /// via the Sequencer. This typically means the sequence number was obtained from a
     /// ClaimedSequenceGuard.
     #[allow(clippy::mut_from_ref)] // Allow lint for this specific, intended pattern
-    pub unsafe fn get_mut(&self, sequence: i64) -> &mut T {
+    pub unsafe fn get_mut(&self, sequence: i64) -> &mut T { unsafe {
         let index = (sequence & self.index_mask) as usize;
         // Safety: This is unsafe because we're bypassing Rust's borrow checker.
         // The UnsafeCell allows us to get a raw pointer, which we then dereference
         // to a mutable reference. The caller (Producer) ensures this is safe
         // by having exclusive claim to this sequence slot via the Sequencer.
         &mut *self.entries[index].get()
-    }
+    }}
 
     /// Gets an immutable reference to an event at a given sequence number.
     /// # Safety
@@ -56,10 +56,10 @@ impl<T: Event> RingBuffer<T> {
                                    // Or, more precisely for get(), it's not `mut_from_ref` but just needs safety docs if unsafe.
                                    // If get() is safe, it doesn't need this allow.
                                    // Assuming your get() also uses `&*self.entries[index].get()`:
-    pub unsafe fn get(&self, sequence: i64) -> &T {
+    pub unsafe fn get(&self, sequence: i64) -> &T { unsafe {
         let index = (sequence & self.index_mask) as usize;
         &*self.entries[index].get()
-    }
+    }}
 
     pub fn capacity(&self) -> i64 {
         self.capacity
