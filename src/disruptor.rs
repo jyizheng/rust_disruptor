@@ -34,6 +34,11 @@ impl<T: Event, W: WaitStrategy> Disruptor<T, W> where W: Clone {
         }
     }
 
+    /// Returns the producer mode of the Disruptor.
+    pub fn producer_mode(&self) -> ProducerMode { // Added public getter
+        self.producer_mode
+    }
+
     pub fn create_producer(&self) -> crate::producer::Producer<T> {
         // Enforce that create_producer is called only once for SingleProducer mode
         if self.producer_mode == ProducerMode::Single && self.producer_created.compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed).is_err() {

@@ -201,7 +201,7 @@ impl Sequencer {
             claimed_sequence_end
     }
 
-    fn mark_sequence_as_published(self: &Arc<Self>, sequence: i64) {
+    pub fn mark_sequence_as_published(self: &Arc<Self>, sequence: i64) {
         let index = (sequence & self.index_mask) as usize;
         let flag_value = sequence >> self.index_shift;
         self.available_buffer[index].store(flag_value, Ordering::Release);
