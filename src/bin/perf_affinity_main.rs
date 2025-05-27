@@ -22,9 +22,9 @@ fn consumer_task_perf_test(
 ) {
     if let Some(core_id) = core_id_option {
         if !core_affinity::set_for_current(core_id) {
-            eprintln!("[性能测试消费者] Warning: Failed to set CPU affinity for consumer thread on core {:?}", core_id);
+            eprintln!("[Perf Test Consumer] Warning: Failed to set CPU affinity for consumer thread on core {:?}", core_id);
         } else {
-            println!("[性能测试消费者] Consumer thread affinity set to core {:?}", core_id);
+            println!("[Perf Test Consumer] Consumer thread affinity set to core {:?}", core_id);
         }
     }
 
@@ -45,7 +45,7 @@ fn consumer_task_perf_test(
                 if processed_count_perf >= iterations_to_process {
                     break;
                 }
-                let event_perf = unsafe { consumer.ring_buffer.get(seq_to_process) };
+                let event_perf = consumer.ring_buffer.get(seq_to_process);
                 local_sum += event_perf.value;
                 processed_count_perf += 1;
             }
@@ -55,12 +55,12 @@ fn consumer_task_perf_test(
     accumulated_sum_perf.fetch_add(local_sum, Ordering::Relaxed);
 
     if tx_perf.send(()).is_err() {
-        eprintln!("[性能测试消费者] 无法发送完成信号。接收端可能已关闭。");
+        eprintln!("[Performance Test Consumer] Could not send completion signal. Receiver may have been dropped.");
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> { // Added Result for error propagation
-    println!("\n--- 运行一对一有序吞吐量测试 (单独二进制, 使用 core_affinity) ---");
+    println!("\n--- Running One-to-One Ordered Throughput Test (Separate Binary, Using core_affinity) ---");
 
     const BUFFER_SIZE_PERF: usize = 65536;
     const ITERATIONS_PERF: u64 = 100_000_000;
@@ -126,7 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> { // Added Result for error 
     // Small pause to allow consumer thread to set its affinity and start
     thread::sleep(std::time::Duration::from_millis(100));
 
-    println!("[Main/Producer] 生产者线程启动 (in main)。");
+    println!("[Main/Producer] Producer loop starting (in main).");
     let start_time_perf = Instant::now(); // Start timing before producer loop
 
     for i in 0..ITERATIONS_PERF {
@@ -138,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> { // Added Result for error 
         }
         claim_guard_perf.publish();
     }
-    println!("[Main/Producer] 生产者线程完成 (in main)。");
+    println!("[Main/Producer] Producer loop completed (in main).");
 
     println!("[Main] Waiting for consumer to process all events...");
     match rx_consumer_done.recv_timeout(std::time::Duration::from_secs(180)) { // Increased timeout
@@ -153,29 +153,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> { // Added Result for error 
 
     println!("[Main] Waiting for consumer thread to join...");
     // This is the ONLY join call for consumer_handle_perf
-    consumer_handle_perf.join().expect("消费者线程 panic");
-    println!("[Main] 消费者线程已 join。");
+    consumer_handle_perf.join().expect("Consumer thread panicked");
+    println!("[Main] Consumer thread joined.");
     // Log messages from consumer task itself are better for its completion details
 
     let elapsed_ms = end_time_perf.duration_since(start_time_perf).as_millis() as u64;
 
-    println!("\n--- 性能测试结果 ---");
-    println!("总迭代次数 (ITERATIONS): {}", ITERATIONS_PERF);
-    println!("缓冲区大小 (BUFFER_SIZE): {}", BUFFER_SIZE_PERF);
-    println!("耗时: {} ms", elapsed_ms);
+    println!("\n--- Performance Test Results ---"); // Changed
+    println!("Total Iterations (ITERATIONS): {}", ITERATIONS_PERF);
+    println!("Buffer Size (BUFFER_SIZE): {}", BUFFER_SIZE_PERF);
+    println!("Elapsed Time: {} ms", elapsed_ms); // Changed
 
     if elapsed_ms > 0 {
         let ops_per_second = (ITERATIONS_PERF * 1000) / elapsed_ms;
-        println!("吞吐量: {} ops/sec", ops_per_second);
+        println!("Throughput: {} ops/sec", ops_per_second); // Changed
     } else {
-        println!("吞吐量: N/A (耗时为0或过短)");
+        println!("Throughput: N/A (elapsed time is 0 or too short)"); // Changed
     }
 
     let final_sum = accumulated_sum_perf.load(Ordering::SeqCst);
-    println!("最终累加和: {}", final_sum);
-    println!("期望累加和: {}", expected_sum_perf);
+    println!("Final Sum: {}", final_sum); // Changed
+    println!("Expected Sum: {}", expected_sum_perf); // Changed
 
-    assert_eq!(final_sum, expected_sum_perf, "累加结果不匹配！");
-    println!("断言通过：累加结果正确。");
+    assert_eq!(final_sum, expected_sum_perf, "Sum mismatch!"); // Changed
+    println!("Assertion passed: Sum is correct."); // Changed
     Ok(())
 }
